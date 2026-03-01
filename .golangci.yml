@@ -1,0 +1,30 @@
+version: "2"
+linters:
+  enable:
+    - goconst
+    - gocritic
+    - gosec
+  settings:
+    gosec:
+      excludes:
+        - G107
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
