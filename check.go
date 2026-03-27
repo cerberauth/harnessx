@@ -5,6 +5,27 @@ import (
 	"time"
 )
 
+type SkipDecision struct {
+	fn func(ctx context.Context, target Target, store ResultStore) string
+}
+
+func SkipAlways(reason string) SkipDecision {
+	return SkipDecision{fn: func(_ context.Context, _ Target, _ ResultStore) string {
+		return reason
+	}}
+}
+
+func SkipWhen(fn func(ctx context.Context, target Target, store ResultStore) string) SkipDecision {
+	return SkipDecision{fn: fn}
+}
+
+func (s SkipDecision) eval(ctx context.Context, target Target, store ResultStore) string {
+	if s.fn == nil {
+		return ""
+	}
+	return s.fn(ctx, target, store)
+}
+
 type CheckID string
 
 type Severity string
@@ -28,7 +49,7 @@ var severityRank = map[Severity]int{
 type CheckScope int
 
 const (
-	ScopeGlobal      CheckScope = iota
+	ScopeGlobal CheckScope = iota
 	ScopePerResource
 )
 
@@ -48,8 +69,10 @@ type Result struct {
 	Findings   []Finding
 	Resources  []Resource
 	Skipped    bool
+	SkipReason string
 	Duration   time.Duration
 	Metadata   map[string]string
+	Data       any
 	Err        error
 }
 
@@ -72,7 +95,9 @@ type Check struct {
 	Description string
 	Tags        []string
 	DependsOn   []CheckID
-	Conditions  []Condition // AND-evaluated; any false → skip
+	Conditions  []Condition
+
+	Skip SkipDecision
 
 	Scope       CheckScope
 	Run         CheckFunc

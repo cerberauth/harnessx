@@ -120,7 +120,7 @@ func New(opts ...Option) *Engine {
 	}
 	e := &Engine{cfg: cfg}
 	if len(cfg.initialChecks) > 0 {
-		_ = e.Register(cfg.initialChecks...) // errors surfaced at Run time
+		_ = e.Register(cfg.initialChecks...)
 	}
 	return e
 }
@@ -214,6 +214,17 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 				}
 				defer levelSem.Release()
 
+				if reason := chk.Skip.eval(ctx, target, snapshot); reason != "" {
+					skipped := Result{CheckID: chk.ID, Skipped: true, SkipReason: reason}
+					store.set(chk.ID, skipped)
+					reporter.OnCheckComplete(skipped)
+					summaryMu.Lock()
+					summary.Skipped++
+					summary.Results = append(summary.Results, skipped)
+					summaryMu.Unlock()
+					return
+				}
+
 				for _, cond := range chk.Conditions {
 					if !cond(snapshot) {
 						skipped := Result{CheckID: chk.ID, Skipped: true}
@@ -221,6 +232,7 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 						reporter.OnCheckComplete(skipped)
 						summaryMu.Lock()
 						summary.Skipped++
+						summary.Results = append(summary.Results, skipped)
 						summaryMu.Unlock()
 						return
 					}
@@ -248,6 +260,7 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 						summary.Executed++
 					}
 					summary.Findings = append(summary.Findings, result.Findings...)
+					summary.Results = append(summary.Results, result)
 					summaryMu.Unlock()
 					return
 				}
@@ -259,6 +272,7 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 					reporter.OnCheckComplete(skipped)
 					summaryMu.Lock()
 					summary.Skipped++
+					summary.Results = append(summary.Results, skipped)
 					summaryMu.Unlock()
 					return
 				}
@@ -296,6 +310,7 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 							summary.Executed++
 						}
 						summary.Findings = append(summary.Findings, result.Findings...)
+						summary.Results = append(summary.Results, result)
 						summaryMu.Unlock()
 					}()
 				}

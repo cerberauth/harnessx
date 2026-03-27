@@ -15,6 +15,7 @@ type ScanSummary struct {
 	Skipped     int
 	Failed      int
 	Findings    []Finding
+	Results     []Result
 	Duration    time.Duration
 	Err         error
 }
