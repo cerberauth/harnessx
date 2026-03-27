@@ -23,21 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Go environment
-        uses: actions/setup-go@v6
+      - uses: cerberauth/ci/actions/go-build-test@main
         with:
-          go-version-file: go.mod
-
-      - name: Lint
-        uses: golangci/golangci-lint-action@v9
-
-      - name: Build
-        run: go build -v ./...
-
-      - name: Test
-        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          codecov-token: ${{ secrets.CODECOV_TOKEN }}
