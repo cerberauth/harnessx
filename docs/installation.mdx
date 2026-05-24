@@ -1,0 +1,46 @@
+---
+title: Installation
+description: Add harnessx to your Go project
+sidebar:
+  order: 2
+---
+
+import { Steps, Aside } from '@/components/docs'
+
+## Requirements
+
+- **Go 1.22** or later
+
+## Install with go get
+
+<Steps>
+
+1. **Add harnessx to your project**
+
+   ```bash
+   go get github.com/cerberauth/harnessx
+   ```
+
+2. **Import in your code**
+
+   ```go
+   import "github.com/cerberauth/harnessx"
+   ```
+
+3. **Verify**
+
+   ```bash
+   go mod tidy
+   go build ./...
+   ```
+
+</Steps>
+
+## Zero dependencies
+
+harnessx uses only the Go standard library. No external packages are required at runtime or build time.
+
+## Next steps
+
+- [Getting Started](../getting-started/) — write your first security check
+- [Concepts](../concepts/) — understand the core ideas

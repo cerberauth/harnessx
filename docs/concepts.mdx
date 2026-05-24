@@ -1,0 +1,192 @@
+---
+title: Core Concepts
+description: Understand checks, scopes, resources, and findings
+sidebar:
+  order: 4
+---
+
+import { Card, CardGrid } from '@/components/docs'
+
+## Checks
+
+A `Check` is a unit of security validation. Each check:
+- Has a unique ID across the engine
+- Runs within a scope (`ScopeGlobal` or `ScopePerResource`)
+- Can depend on other checks
+- Returns a `Result` with pass/fail status and optional findings
+
+```go
+type Check struct {
+  ID         CheckID
+  Scope      CheckScope
+  Timeout    time.Duration
+  DependsOn  []CheckID
+  Run        func(context.Context, Target) (Result, error)
+  RunResource func(context.Context, Target, Resource) (Result, error)
+}
+```
+
+## Execution Scopes
+
+<CardGrid>
+  <Card title="ScopeGlobal" icon="document">
+    Runs **once per target**. Examples: TLS cert validity, DNS resolution, CORS headers.
+  </Card>
+  <Card title="ScopePerResource" icon="puzzle">
+    Runs **once per discovered resource**. Examples: check each endpoint, each user, each bucket.
+  </Card>
+</CardGrid>
+
+### Example: Global check
+
+```go
+harnessx.Check{
+  ID:    "tls-valid",
+  Scope: harnessx.ScopeGlobal,
+  Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+    // Check target once
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+```
+
+### Example: Per-resource check
+
+```go
+harnessx.Check{
+  ID:    "endpoint-auth",
+  Scope: harnessx.ScopePerResource,
+  RunResource: func(ctx context.Context, target harnessx.Target, res harnessx.Resource) (harnessx.Result, error) {
+    // Check each resource (e.g., each API endpoint)
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+```
+
+## Resources
+
+A `Resource` is discovered by a global check and consumed by per-resource checks.
+
+```go
+type Resource struct {
+  ID     string
+  Type   string
+  Metadata map[string]any
+}
+```
+
+Global checks emit resources:
+
+```go
+harnessx.Check{
+  ID:    "discover-endpoints",
+  Scope: harnessx.ScopeGlobal,
+  Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+    // Discover resources
+    resources := []harnessx.Resource{
+      {ID: "/api/users", Type: "endpoint"},
+      {ID: "/api/posts", Type: "endpoint"},
+    }
+
+    return harnessx.Result{
+      Passed:    true,
+      Resources: resources,
+    }, nil
+  },
+}
+```
+
+Downstream per-resource checks receive them:
+
+```go
+harnessx.Check{
+  ID:        "validate-endpoint",
+  Scope:     harnessx.ScopePerResource,
+  DependsOn: []harnessx.CheckID{"discover-endpoints"},
+  RunResource: func(ctx context.Context, target harnessx.Target, res harnessx.Resource) (harnessx.Result, error) {
+    // Check each endpoint
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+```
+
+## Dependencies
+
+Checks can depend on other checks. The engine automatically sorts them topologically and runs independent checks in parallel.
+
+```go
+// B depends on A
+harnessx.Check{
+  ID:        "b",
+  DependsOn: []harnessx.CheckID{"a"},
+  // ...
+}
+```
+
+The engine detects and rejects:
+- **Cycles**: A → B → A
+- **Unknown dependencies**: B depends on non-existent check C
+- **Duplicate IDs**: two checks with the same ID
+
+## Conditions
+
+Conditions allow you to skip checks based on prior results.
+
+```go
+check := harnessx.Check{
+  ID:        "auth-method",
+  Condition: harnessx.IfCheckPassed("tls-valid"),
+  // Only runs if "tls-valid" passed
+}
+```
+
+Available conditions:
+- `IfCheckPassed(id)` — run if check passed
+- `IfCheckFound(id)` — run if check was executed (passed or failed)
+- `IfCheckSkipped(id)` — run if check was skipped
+- `All(conds...)` — all conditions must be true
+- `Any(conds...)` — at least one condition must be true
+- `Not(cond)` — negate a condition
+
+## Findings
+
+A `Finding` describes a security issue found by a check.
+
+```go
+type Finding struct {
+  CheckID      CheckID
+  Severity     Severity // info, low, medium, high, critical
+  Message      string
+  Evidence     string
+  Remediation  string
+  Metadata     map[string]any
+}
+
+type Result struct {
+  Passed    bool
+  Skipped   bool
+  Finding   Finding
+  Resources []Resource
+}
+```
+
+## Execution Model
+
+1. **Topological sort**: Engine sorts checks into dependency levels using Kahn's BFS
+2. **Level execution**: Each level runs in parallel (bounded by `MaxConcurrency`)
+3. **Snapshot**: Before each level, a frozen snapshot is taken of all prior results
+4. **Per-resource parallelism**: Per-resource checks fan out across resources (bounded by `MaxResourceConcurrency`)
+5. **Panic recovery**: If a check panics, it's recorded as a `ScanError` and the scan continues
+6. **Context propagation**: All operations respect the provided `context.Context` and per-check timeouts
+
+## Error Handling
+
+The `Run()` method returns a `ScanError` if:
+- The context is canceled
+- A check times out
+- A check panics
+- A dependency is not found
+- There are duplicate check IDs
+- There are circular dependencies
+
+Checks return regular errors for application logic failures (network errors, parsing, etc.).

@@ -1,0 +1,169 @@
+---
+title: Resource Discovery
+description: Discover and scan multiple resources per target
+sidebar:
+  order: 2
+---
+
+## Overview
+
+Resource discovery lets you:
+1. Discover resources in a global check (e.g., list all API endpoints)
+2. Fan out per-resource checks to validate each one independently
+3. Parallelize validation across resources
+
+## Discover resources
+
+A global check emits `Resource` objects:
+
+```go
+checkDiscoverEndpoints := harnessx.Check{
+  ID:    "discover-endpoints",
+  Scope: harnessx.ScopeGlobal,
+  Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+    // Fetch API spec or crawl the service
+    endpoints := []harnessx.Resource{
+      {
+        ID:   "/api/users",
+        Type: "endpoint",
+        Metadata: map[string]any{
+          "method": "GET",
+        },
+      },
+      {
+        ID:   "/api/posts",
+        Type: "endpoint",
+        Metadata: map[string]any{
+          "method": "GET",
+        },
+      },
+    }
+
+    return harnessx.Result{
+      Passed:    true,
+      Resources: endpoints,
+    }, nil
+  },
+}
+```
+
+## Validate per-resource
+
+A per-resource check runs once for each resource:
+
+```go
+checkValidateEndpoint := harnessx.Check{
+  ID:        "validate-endpoint",
+  Scope:     harnessx.ScopePerResource,
+  DependsOn: []harnessx.CheckID{"discover-endpoints"},
+  RunResource: func(ctx context.Context, target harnessx.Target, res harnessx.Resource) (harnessx.Result, error) {
+    // res is one endpoint from discovery
+    method := res.Metadata["method"].(string)
+    endpoint := res.ID
+
+    // Validate this endpoint
+    // e.g., check for authentication, rate limiting, CORS headers
+
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+```
+
+## Parallel per-resource execution
+
+The engine fans out per-resource checks in parallel:
+
+```go
+//  discover-endpoints (global) → 2 endpoints
+//  ↓
+//  validate-endpoint (per-resource) → runs 2x in parallel (bounded by MaxResourceConcurrency)
+```
+
+Concurrency is controlled by:
+
+```go
+engine := harnessx.New(
+  harnessx.WithMaxResourceConcurrency(5),  // Max 5 per-resource checks at once
+)
+```
+
+## Empty resource lists
+
+If a discovery check finds no resources, per-resource checks depending on it are silently skipped:
+
+```go
+if discovery returns Resources: []Resource{} {
+  // Per-resource checks are skipped
+  // Result.Skipped = true
+}
+```
+
+## Common patterns
+
+### Multi-level discovery
+
+```go
+// Level 0: Discover services
+checkDiscoverServices := harnessx.Check{
+  ID:    "discover-services",
+  Scope: harnessx.ScopeGlobal,
+  Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+    return harnessx.Result{
+      Passed: true,
+      Resources: []harnessx.Resource{
+        {ID: "service-a"},
+        {ID: "service-b"},
+      },
+    }, nil
+  },
+}
+
+// Level 1: Validate each service (per-resource check)
+checkValidateService := harnessx.Check{
+  ID:        "validate-service",
+  Scope:     harnessx.ScopePerResource,
+  DependsOn: []harnessx.CheckID{"discover-services"},
+  RunResource: func(ctx context.Context, target harnessx.Target, res harnessx.Resource) (harnessx.Result, error) {
+    service := res.ID
+    // Validate service
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+
+// Level 2: For each service, discover its endpoints
+checkDiscoverEndpoints := harnessx.Check{
+  ID:        "discover-endpoints",
+  Scope:     harnessx.ScopePerResource,
+  DependsOn: []harnessx.CheckID{"validate-service"},
+  RunResource: func(ctx context.Context, target harnessx.Target, res harnessx.Resource) (harnessx.Result, error) {
+    service := res.ID
+    // Discover endpoints in this service
+    return harnessx.Result{
+      Passed: true,
+      Resources: []harnessx.Resource{
+        {ID: service + ":/api/users"},
+        {ID: service + ":/api/posts"},
+      },
+    }, nil
+  },
+}
+
+// Level 3: Validate each endpoint
+checkValidateEndpoint := harnessx.Check{
+  ID:        "validate-endpoint",
+  Scope:     harnessx.ScopePerResource,
+  DependsOn: []harnessx.CheckID{"discover-endpoints"},
+  RunResource: func(ctx context.Context, target harnessx.Target, res harnessx.Resource) (harnessx.Result, error) {
+    endpoint := res.ID
+    // Validate endpoint
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+```
+
+## Best practices
+
+- Keep discovery checks fast (they're on the critical path)
+- Include enough metadata in resources for downstream checks to use
+- Use resource IDs consistently (e.g., always use full path or always use relative)
+- Test with 0 resources to ensure per-resource checks handle empty gracefully

@@ -1,0 +1,131 @@
+---
+title: Getting Started
+description: Write and run your first security checks
+sidebar:
+  order: 3
+---
+
+import { Steps, Aside } from '@/components/docs'
+
+<Steps>
+
+1. **Create a basic check**
+
+   ```go
+   package main
+
+   import (
+     "context"
+     "github.com/cerberauth/harnessx"
+   )
+
+   func main() {
+     ctx := context.Background()
+
+     // Define a simple check
+     check := harnessx.Check{
+       ID:    "tls-enabled",
+       Scope: harnessx.ScopeGlobal,
+       Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+         // Your security check logic
+         return harnessx.Result{Passed: true}, nil
+       },
+     }
+
+     // Create engine and register check
+     engine := harnessx.New()
+     engine.Register(check)
+
+     // Run the scan
+     summary, err := engine.Run(ctx, harnessx.Target{})
+     if err != nil {
+       panic(err)
+     }
+
+     println("Passed:", summary.Passed)
+     println("Failed:", summary.Failed)
+   }
+   ```
+
+2. **Create a target**
+
+   A `Target` represents what you're scanning:
+
+   ```go
+   target := harnessx.Target{
+     ID: "api-server",
+     // Metadata helps checks identify the target
+   }
+   ```
+
+3. **Define findings**
+
+   Checks return findings with severity levels:
+
+   ```go
+   check := harnessx.Check{
+     ID:    "weak-cipher",
+     Scope: harnessx.ScopeGlobal,
+     Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+       // Severity: info, low, medium, high, critical
+       finding := harnessx.Finding{
+         CheckID:     "weak-cipher",
+         Severity:    harnessx.SeverityHigh,
+         Message:     "Weak cipher suite detected",
+         Evidence:    "TLS_RSA_WITH_AES_128_CBC_SHA",
+         Remediation: "Use TLS 1.3 with AEAD ciphers",
+       }
+
+       return harnessx.Result{
+         Passed: false,
+         Finding: finding,
+       }, nil
+     },
+   }
+   ```
+
+4. **Add a reporter to track progress**
+
+   ```go
+   engine := harnessx.New(
+     harnessx.WithReporter(&MyReporter{}),
+   )
+
+   type MyReporter struct{}
+
+   func (r *MyReporter) OnCheckStart(checkID string) {
+     println("Starting:", checkID)
+   }
+
+   func (r *MyReporter) OnCheckComplete(checkID string, result harnessx.Result) {
+     println("Completed:", checkID, "- Passed:", result.Passed)
+   }
+
+   func (r *MyReporter) OnScanComplete(summary harnessx.ScanSummary) {
+     println("Scan done. Total:", summary.Total, "Passed:", summary.Passed)
+   }
+   ```
+
+5. **Run the scan**
+
+   ```go
+   summary, err := engine.Run(ctx, target)
+   if err != nil {
+     // Handle scan errors (context canceled, check panicked, etc.)
+     panic(err)
+   }
+
+   // Check results
+   if summary.Failed > 0 {
+     println("Security issues found!")
+   }
+   ```
+
+</Steps>
+
+## What's next
+
+- [Concepts](../concepts/) — deep dive into checks, scopes, and conditions
+- [Check Dependencies](../guides/dependencies/) — create complex workflows with DAG scheduling
+- [Resource Discovery](../guides/resources/) — discover and scan multiple resources per target
+- [Conditional Execution](../guides/conditions/) — skip checks based on prior results

@@ -1,0 +1,209 @@
+---
+title: Custom Reporters
+description: Track scan progress and collect results
+sidebar:
+  order: 4
+---
+
+## Overview
+
+Reporters are callbacks that fire during a scan. Use them to:
+- Log progress in real-time
+- Collect and aggregate results
+- Integrate with external systems
+- Implement custom output formats
+
+## Reporter interface
+
+```go
+type Reporter interface {
+  OnCheckStart(checkID string)
+  OnCheckComplete(checkID string, result Result)
+  OnScanComplete(summary ScanSummary)
+}
+```
+
+## Basic reporter
+
+```go
+type SimpleReporter struct{}
+
+func (r *SimpleReporter) OnCheckStart(checkID string) {
+  println("Starting:", checkID)
+}
+
+func (r *SimpleReporter) OnCheckComplete(checkID string, result harnessx.Result) {
+  status := "✓"
+  if !result.Passed {
+    status = "✗"
+  }
+  if result.Skipped {
+    status = "○"
+  }
+  println(status, checkID)
+}
+
+func (r *SimpleReporter) OnScanComplete(summary harnessx.ScanSummary) {
+  println("Scan complete.")
+  println("Total:", summary.Total)
+  println("Passed:", summary.Passed)
+  println("Failed:", summary.Failed)
+  println("Skipped:", summary.Skipped)
+}
+
+engine := harnessx.New(
+  harnessx.WithReporter(&SimpleReporter{}),
+)
+```
+
+## Collecting results
+
+```go
+type ResultCollector struct {
+  passed   []string
+  failed   []string
+  findings []harnessx.Finding
+}
+
+func (r *ResultCollector) OnCheckStart(checkID string) {
+  // No action needed
+}
+
+func (r *ResultCollector) OnCheckComplete(checkID string, result harnessx.Result) {
+  if result.Passed {
+    r.passed = append(r.passed, checkID)
+  } else if !result.Skipped {
+    r.failed = append(r.failed, checkID)
+    if result.Finding.CheckID != "" {
+      r.findings = append(r.findings, result.Finding)
+    }
+  }
+}
+
+func (r *ResultCollector) OnScanComplete(summary harnessx.ScanSummary) {
+  // Results are now collected
+}
+
+collector := &ResultCollector{}
+engine := harnessx.New(harnessx.WithReporter(collector))
+
+// After scan
+for _, finding := range collector.findings {
+  println(finding.Severity, ":", finding.Message)
+}
+```
+
+## JSON output
+
+```go
+type JSONReporter struct {
+  checks []map[string]any
+}
+
+func (r *JSONReporter) OnCheckStart(checkID string) {
+  r.checks = append(r.checks, map[string]any{
+    "id":    checkID,
+    "start": time.Now(),
+  })
+}
+
+func (r *JSONReporter) OnCheckComplete(checkID string, result harnessx.Result) {
+  for i, check := range r.checks {
+    if check["id"] == checkID {
+      r.checks[i]["end"] = time.Now()
+      r.checks[i]["passed"] = result.Passed
+      r.checks[i]["skipped"] = result.Skipped
+      if result.Finding.CheckID != "" {
+        r.checks[i]["finding"] = result.Finding
+      }
+      break
+    }
+  }
+}
+
+func (r *JSONReporter) OnScanComplete(summary harnessx.ScanSummary) {
+  data := map[string]any{
+    "summary": summary,
+    "checks":  r.checks,
+  }
+  b, _ := json.MarshalIndent(data, "", "  ")
+  println(string(b))
+}
+```
+
+## Progress bar reporter
+
+```go
+import "sync"
+
+type ProgressReporter struct {
+  mu    sync.Mutex
+  total int
+  done  int
+}
+
+func NewProgressReporter(total int) *ProgressReporter {
+  return &ProgressReporter{total: total}
+}
+
+func (r *ProgressReporter) OnCheckStart(checkID string) {}
+
+func (r *ProgressReporter) OnCheckComplete(checkID string, result harnessx.Result) {
+  r.mu.Lock()
+  defer r.mu.Unlock()
+  r.done++
+  percent := (r.done * 100) / r.total
+  println(fmt.Sprintf("[%d%%] %d/%d", percent, r.done, r.total))
+}
+
+func (r *ProgressReporter) OnScanComplete(summary harnessx.ScanSummary) {
+  println("Done!")
+}
+
+// Before scanning, count total checks
+engine := harnessx.New(harnessx.WithReporter(NewProgressReporter(12)))
+```
+
+## Multiple reporters
+
+```go
+type MultiReporter struct {
+  reporters []harnessx.Reporter
+}
+
+func (r *MultiReporter) OnCheckStart(checkID string) {
+  for _, rep := range r.reporters {
+    rep.OnCheckStart(checkID)
+  }
+}
+
+func (r *MultiReporter) OnCheckComplete(checkID string, result harnessx.Result) {
+  for _, rep := range r.reporters {
+    rep.OnCheckComplete(checkID, result)
+  }
+}
+
+func (r *MultiReporter) OnScanComplete(summary harnessx.ScanSummary) {
+  for _, rep := range r.reporters {
+    rep.OnScanComplete(summary)
+  }
+}
+
+engine := harnessx.New(
+  harnessx.WithReporter(&MultiReporter{
+    reporters: []harnessx.Reporter{
+      &SimpleReporter{},
+      &ResultCollector{},
+      &JSONReporter{},
+    },
+  }),
+)
+```
+
+## Best practices
+
+- Keep reporter logic fast (it runs on the critical path)
+- Use sync.Mutex if your reporter maintains state
+- Don't modify scan state or results in a reporter
+- Use `OnScanComplete` for final aggregation
+- Implement `OnCheckStart` for real-time visibility
