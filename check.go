@@ -93,6 +93,7 @@ type Check struct {
 	ID          CheckID
 	Name        string
 	Description string
+	Link        string
 	Tags        []string
 	DependsOn   []CheckID
 	Conditions  []Condition

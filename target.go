@@ -11,4 +11,5 @@ type Target struct {
 	URL      string
 	Host     string
 	Metadata map[string]string
+	Data     any
 }

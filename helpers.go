@@ -4,6 +4,13 @@ func ResultData(id CheckID, data any) Result {
 	return Result{CheckID: id, Data: data}
 }
 
+// DataResult returns a Result carrying data without a CheckID.
+// The engine always sets CheckID after the run, so callers inside
+// a Run func do not need to supply the ID themselves.
+func DataResult(data any) Result {
+	return Result{Data: data}
+}
+
 func Skip(id CheckID, reason string) Result {
 	return Result{CheckID: id, Skipped: true, SkipReason: reason}
 }

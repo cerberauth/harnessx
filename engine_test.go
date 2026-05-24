@@ -51,8 +51,7 @@ func TestEngine_DependencyAndSkipFlow(t *testing.T) {
 
 	// A: global, no deps, no findings
 	checkA := Check{
-		ID:    "A",
-		Scope: ScopeGlobal,
+		ID: "A",
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
 			return Result{CheckID: "A"}, nil // no findings
 		},
@@ -60,7 +59,6 @@ func TestEngine_DependencyAndSkipFlow(t *testing.T) {
 	// B: global, depends A
 	checkB := Check{
 		ID:        "B",
-		Scope:     ScopeGlobal,
 		DependsOn: []CheckID{"A"},
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
 			return Result{CheckID: "B"}, nil
@@ -69,7 +67,6 @@ func TestEngine_DependencyAndSkipFlow(t *testing.T) {
 	// C: global, depends A, only runs if A found something (it won't)
 	checkC := Check{
 		ID:         "C",
-		Scope:      ScopeGlobal,
 		DependsOn:  []CheckID{"A"},
 		Conditions: []Condition{IfCheckFound("A", SeverityLow)},
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
@@ -79,7 +76,6 @@ func TestEngine_DependencyAndSkipFlow(t *testing.T) {
 	// D: global, depends B and C
 	checkD := Check{
 		ID:        "D",
-		Scope:     ScopeGlobal,
 		DependsOn: []CheckID{"B", "C"},
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
 			return Result{CheckID: "D"}, nil
@@ -126,8 +122,7 @@ func TestEngine_ResourceDiscovery(t *testing.T) {
 	}
 
 	recon := Check{
-		ID:    "recon",
-		Scope: ScopeGlobal,
+		ID: "recon",
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
 			return Result{CheckID: "recon", Resources: resources}, nil
 		},
@@ -192,8 +187,7 @@ func TestEngine_ConcurrencyLimits(t *testing.T) {
 	}
 
 	recon := Check{
-		ID:    "recon",
-		Scope: ScopeGlobal,
+		ID: "recon",
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
 			return Result{CheckID: "recon", Resources: resources}, nil
 		},
@@ -256,15 +250,13 @@ func TestEngine_PanicRecovery(t *testing.T) {
 	e := New(WithReporter(rep), WithDefaultTimeout(5*time.Second))
 
 	panicCheck := Check{
-		ID:    "panicker",
-		Scope: ScopeGlobal,
+		ID: "panicker",
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
 			panic("intentional panic for testing")
 		},
 	}
 	afterCheck := Check{
-		ID:    "after",
-		Scope: ScopeGlobal,
+		ID: "after",
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
 			return Result{CheckID: "after"}, nil
 		},
@@ -312,8 +304,7 @@ func TestEngine_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	slowCheck := Check{
-		ID:    "slow",
-		Scope: ScopeGlobal,
+		ID: "slow",
 		Run: func(checkCtx context.Context, _ Target, _ ResultStore) (Result, error) {
 			close(started)
 			select {
@@ -351,7 +342,7 @@ func TestEngine_ContextCancellation(t *testing.T) {
 
 func TestEngine_RegisterDuplicate(t *testing.T) {
 	e := New()
-	chk := Check{ID: "dup", Scope: ScopeGlobal, Run: stubRun}
+	chk := Check{ID: "dup", Run: stubRun}
 	if err := e.Register(chk); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
@@ -391,7 +382,7 @@ func TestEngine_ScopePerResourceWithoutRunResource(t *testing.T) {
 // ── WithChecks functional option ──────────────────────────────────────────────
 
 func TestEngine_WithChecks(t *testing.T) {
-	chk := Check{ID: "pre", Scope: ScopeGlobal, Run: stubRun}
+	chk := Check{ID: "pre", Run: stubRun}
 	e := New(WithChecks(chk), WithDefaultTimeout(5*time.Second))
 	summary, err := e.Run(context.Background(), testTarget)
 	if err != nil {

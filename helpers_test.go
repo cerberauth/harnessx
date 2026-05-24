@@ -2,6 +2,26 @@ package harnessx
 
 import "testing"
 
+func TestDataResult_SetsDataOnly(t *testing.T) {
+	r := DataResult(42)
+	if r.CheckID != "" {
+		t.Errorf("CheckID should be empty, got %q", r.CheckID)
+	}
+	if r.Data != 42 {
+		t.Errorf("Data: want 42, got %v", r.Data)
+	}
+	if r.Skipped {
+		t.Error("DataResult result should not be skipped")
+	}
+}
+
+func TestDataResult_NilData(t *testing.T) {
+	r := DataResult(nil)
+	if r.Data != nil {
+		t.Errorf("expected nil data, got %v", r.Data)
+	}
+}
+
 func TestResultData_SetsCheckIDAndData(t *testing.T) {
 	r := ResultData("mycheck", 42)
 	if r.CheckID != "mycheck" {

@@ -16,9 +16,9 @@ func stubRunResource(_ context.Context, _ Target, _ Resource, _ ResultStore) (Re
 
 func TestGraphTopoSort_Linear(t *testing.T) {
 	// A → B → C
-	a := Check{ID: "A", Scope: ScopeGlobal, Run: stubRun}
-	b := Check{ID: "B", Scope: ScopeGlobal, Run: stubRun, DependsOn: []CheckID{"A"}}
-	c := Check{ID: "C", Scope: ScopeGlobal, Run: stubRun, DependsOn: []CheckID{"B"}}
+	a := Check{ID: "A", Run: stubRun}
+	b := Check{ID: "B", Run: stubRun, DependsOn: []CheckID{"A"}}
+	c := Check{ID: "C", Run: stubRun, DependsOn: []CheckID{"B"}}
 
 	g, err := newGraph([]Check{a, b, c})
 	if err != nil {
@@ -45,9 +45,9 @@ func TestGraphTopoSort_Linear(t *testing.T) {
 
 func TestGraphTopoSort_Parallel(t *testing.T) {
 	// A has no deps; B and C both depend on A → level 0: [A], level 1: [B, C]
-	a := Check{ID: "A", Scope: ScopeGlobal, Run: stubRun}
-	b := Check{ID: "B", Scope: ScopeGlobal, Run: stubRun, DependsOn: []CheckID{"A"}}
-	c := Check{ID: "C", Scope: ScopeGlobal, Run: stubRun, DependsOn: []CheckID{"A"}}
+	a := Check{ID: "A", Run: stubRun}
+	b := Check{ID: "B", Run: stubRun, DependsOn: []CheckID{"A"}}
+	c := Check{ID: "C", Run: stubRun, DependsOn: []CheckID{"A"}}
 
 	g, err := newGraph([]Check{a, b, c})
 	if err != nil {
@@ -71,8 +71,8 @@ func TestGraphTopoSort_Parallel(t *testing.T) {
 
 func TestGraphTopoSort_CycleDetected(t *testing.T) {
 	// A → B → A (cycle)
-	a := Check{ID: "A", Scope: ScopeGlobal, Run: stubRun, DependsOn: []CheckID{"B"}}
-	b := Check{ID: "B", Scope: ScopeGlobal, Run: stubRun, DependsOn: []CheckID{"A"}}
+	a := Check{ID: "A", Run: stubRun, DependsOn: []CheckID{"B"}}
+	b := Check{ID: "B", Run: stubRun, DependsOn: []CheckID{"A"}}
 
 	g, err := newGraph([]Check{a, b})
 	if err != nil {
@@ -85,7 +85,7 @@ func TestGraphTopoSort_CycleDetected(t *testing.T) {
 }
 
 func TestGraphNewGraph_UnknownDependency(t *testing.T) {
-	a := Check{ID: "A", Scope: ScopeGlobal, Run: stubRun, DependsOn: []CheckID{"MISSING"}}
+	a := Check{ID: "A", Run: stubRun, DependsOn: []CheckID{"MISSING"}}
 	_, err := newGraph([]Check{a})
 	if !errors.Is(err, ErrUnknownDependency) {
 		t.Fatalf("expected ErrUnknownDependency, got %v", err)
@@ -94,9 +94,9 @@ func TestGraphNewGraph_UnknownDependency(t *testing.T) {
 
 func TestGraphTopoSort_NoDeps(t *testing.T) {
 	checks := []Check{
-		{ID: "X", Scope: ScopeGlobal, Run: stubRun},
-		{ID: "Y", Scope: ScopeGlobal, Run: stubRun},
-		{ID: "Z", Scope: ScopeGlobal, Run: stubRun},
+		{ID: "X", Run: stubRun},
+		{ID: "Y", Run: stubRun},
+		{ID: "Z", Run: stubRun},
 	}
 	g, err := newGraph(checks)
 	if err != nil {
