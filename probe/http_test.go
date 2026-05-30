@@ -117,7 +117,7 @@ func TestRoundTrip_UserAgentSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if gotUA != "test-agent/1.0" {
 		t.Errorf("User-Agent = %q, want test-agent/1.0", gotUA)
 	}
@@ -140,7 +140,7 @@ func TestRoundTrip_AnyVerb(t *testing.T) {
 			t.Errorf("%s: unexpected error: %v", method, err)
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("%s: status = %d", method, resp.StatusCode)
 		}
@@ -165,7 +165,7 @@ func TestRoundTrip_Retry_429_ThenSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("final status = %d, want 200", resp.StatusCode)
 	}
@@ -192,7 +192,7 @@ func TestRoundTrip_Retry_503_ThenSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("final status = %d", resp.StatusCode)
 	}
@@ -237,7 +237,7 @@ func TestRoundTrip_Non4xxNotRetried(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != status {
 				t.Errorf("status = %d, want %d", resp.StatusCode, status)
 			}
@@ -259,8 +259,11 @@ func TestRoundTrip_NetworkError_Retry(t *testing.T) {
 				t.Error("ResponseWriter does not implement Hijacker")
 				return
 			}
-			conn, _, _ := hj.Hijack()
-			conn.Close()
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -273,7 +276,7 @@ func TestRoundTrip_NetworkError_Retry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error after retries: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
@@ -281,9 +284,15 @@ func TestRoundTrip_NetworkError_Retry(t *testing.T) {
 
 func TestRoundTrip_NetworkError_ExhaustedWrapsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hj, _ := w.(http.Hijacker)
-		conn, _, _ := hj.Hijack()
-		conn.Close()
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
 	}))
 	defer srv.Close()
 
@@ -363,7 +372,7 @@ func TestRoundTrip_BodyReplayedOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	for i, body := range received {
 		if body != wantBody {
@@ -438,7 +447,6 @@ func TestRetryAfterDuration_Fallback(t *testing.T) {
 func TestBackoffDuration_Grows(t *testing.T) {
 	base := 10 * time.Millisecond
 	// Each successive attempt has a larger or equal cap.
-	prevMax := time.Duration(0)
 	for attempt := 0; attempt <= 12; attempt++ {
 		// Run multiple samples to check the cap.
 		maxSeen := time.Duration(0)
@@ -455,10 +463,6 @@ func TestBackoffDuration_Grows(t *testing.T) {
 		if maxSeen > slot {
 			t.Errorf("attempt %d: max sample %v exceeds slot %v", attempt, maxSeen, slot)
 		}
-		if attempt > 0 && slot <= prevMax {
-			// slot should grow (until cap)
-		}
-		prevMax = slot
 	}
 }
 

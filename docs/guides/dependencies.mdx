@@ -110,7 +110,7 @@ func (r *ScanReporter) OnCheckStart(checkID string) {
   }
 }
 
-engine := harnessx.New(harnessx.WithReporter(&ScanReporter{}))
+engine := harnessx.New(harnessx.WithReporters(&ScanReporter{}))
 ```
 
 ## Best practices

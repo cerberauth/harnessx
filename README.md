@@ -235,7 +235,7 @@ type Reporter interface {
 
 ```go
 engine := harnessx.New(
-    harnessx.WithReporter(myReporter),
+    harnessx.WithReporters(myReporter, otherReporter),
 )
 ```
 
@@ -264,7 +264,7 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error)
 | `WithMaxConcurrency(n)` | `runtime.NumCPU()` | Maximum checks running concurrently within a level |
 | `WithMaxResourceConcurrency(n)` | `runtime.NumCPU()` | Default maximum resource goroutines per check |
 | `WithDefaultTimeout(d)` | `30s` | Per-check timeout when `Check.Timeout` is zero |
-| `WithReporter(r)` | `NoopReporter` | Real-time event callbacks |
+| `WithReporters(reporters...)` | `NoopReporter` | Real-time event callbacks (multiple reporters supported) |
 | `WithChecks(checks...)` | — | Register checks at construction time |
 
 ### Severities

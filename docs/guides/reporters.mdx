@@ -52,7 +52,7 @@ func (r *SimpleReporter) OnScanComplete(summary harnessx.ScanSummary) {
 }
 
 engine := harnessx.New(
-  harnessx.WithReporter(&SimpleReporter{}),
+  harnessx.WithReporters(&SimpleReporter{}),
 )
 ```
 
@@ -85,7 +85,7 @@ func (r *ResultCollector) OnScanComplete(summary harnessx.ScanSummary) {
 }
 
 collector := &ResultCollector{}
-engine := harnessx.New(harnessx.WithReporter(collector))
+engine := harnessx.New(harnessx.WithReporters(collector))
 
 // After scan
 for _, finding := range collector.findings {
@@ -161,42 +161,32 @@ func (r *ProgressReporter) OnScanComplete(summary harnessx.ScanSummary) {
 }
 
 // Before scanning, count total checks
-engine := harnessx.New(harnessx.WithReporter(NewProgressReporter(12)))
+engine := harnessx.New(harnessx.WithReporters(NewProgressReporter(12)))
 ```
 
 ## Multiple reporters
 
+Pass multiple reporters directly to `WithReporters`:
+
 ```go
-type MultiReporter struct {
-  reporters []harnessx.Reporter
-}
+engine := harnessx.New(
+  harnessx.WithReporters(
+    &SimpleReporter{},
+    &ResultCollector{},
+    &JSONReporter{},
+  ),
+)
+```
 
-func (r *MultiReporter) OnCheckStart(checkID string) {
-  for _, rep := range r.reporters {
-    rep.OnCheckStart(checkID)
-  }
-}
+For dynamic reporter lists, use `NewMultiReporter`:
 
-func (r *MultiReporter) OnCheckComplete(checkID string, result harnessx.Result) {
-  for _, rep := range r.reporters {
-    rep.OnCheckComplete(checkID, result)
-  }
-}
-
-func (r *MultiReporter) OnScanComplete(summary harnessx.ScanSummary) {
-  for _, rep := range r.reporters {
-    rep.OnScanComplete(summary)
-  }
-}
+```go
+var reporters []harnessx.Reporter
+reporters = append(reporters, &SimpleReporter{})
+reporters = append(reporters, &ResultCollector{})
 
 engine := harnessx.New(
-  harnessx.WithReporter(&MultiReporter{
-    reporters: []harnessx.Reporter{
-      &SimpleReporter{},
-      &ResultCollector{},
-      &JSONReporter{},
-    },
-  }),
+  harnessx.WithReporters(harnessx.NewMultiReporter(reporters...)),
 )
 ```
 

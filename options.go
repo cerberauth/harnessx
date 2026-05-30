@@ -51,10 +51,17 @@ func WithDefaultTimeout(d time.Duration) Option {
 	}
 }
 
-func WithReporter(r Reporter) Option {
+func WithReporters(reporters ...Reporter) Option {
 	return func(cfg *engineConfig) {
-		if r != nil {
-			cfg.reporter = r
+		switch len(reporters) {
+		case 0:
+			cfg.reporter = NoopReporter{}
+		case 1:
+			if reporters[0] != nil {
+				cfg.reporter = reporters[0]
+			}
+		default:
+			cfg.reporter = NewMultiReporter(reporters...)
 		}
 	}
 }

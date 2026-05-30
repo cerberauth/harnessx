@@ -175,6 +175,7 @@ type Reporter interface {
 
 **Implementations:**
 - `NoopReporter` — does nothing (useful as default)
+- `MultiReporter` — fans out to multiple reporters via `NewMultiReporter(...)`
 
 ### ScanError
 
@@ -218,7 +219,7 @@ func New(opts ...Option) *Engine
 ```go
 engine := harnessx.New(
   harnessx.WithMaxConcurrency(4),
-  harnessx.WithReporter(myReporter),
+  harnessx.WithReporters(myReporter, otherReporter),
 )
 ```
 
@@ -286,15 +287,15 @@ func WithMaxResourceConcurrency(n int) Option
 
 **Default:** `1` (sequential execution)
 
-### WithReporter
+### WithReporters
 
-Set the reporter callback.
+Set one or more reporter callbacks. Multiple reporters are automatically fanned out.
 
 ```go
-func WithReporter(r Reporter) Option
+func WithReporters(reporters ...Reporter) Option
 ```
 
-**Default:** `NoopReporter()`
+**Default:** `NoopReporter()` if no reporters provided
 
 ## Execution Flow
 
