@@ -28,24 +28,6 @@ func (s SkipDecision) eval(ctx context.Context, target Target, store ResultStore
 
 type CheckID string
 
-type Severity string
-
-const (
-	SeverityInfo     Severity = "info"
-	SeverityLow      Severity = "low"
-	SeverityMedium   Severity = "medium"
-	SeverityHigh     Severity = "high"
-	SeverityCritical Severity = "critical"
-)
-
-var severityRank = map[Severity]int{
-	SeverityInfo:     0,
-	SeverityLow:      1,
-	SeverityMedium:   2,
-	SeverityHigh:     3,
-	SeverityCritical: 4,
-}
-
 type CheckScope int
 
 const (
@@ -53,33 +35,32 @@ const (
 	ScopePerResource
 )
 
-type Finding struct {
+type Observation struct {
 	CheckID     CheckID
 	ResourceID  string
 	Title       string
 	Description string
 	Evidence    string
-	Severity    Severity
 	Metadata    map[string]string
 }
 
 type Result struct {
-	CheckID    CheckID
-	ResourceID string
-	Findings   []Finding
-	Resources  []Resource
-	Skipped    bool
-	SkipReason string
-	Duration   time.Duration
-	Metadata   map[string]string
-	Data       any
-	Err        error
+	CheckID      CheckID
+	ResourceID   string
+	Observations []Observation
+	Resources    []Resource
+	Skipped      bool
+	SkipReason   string
+	Duration     time.Duration
+	Metadata     map[string]string
+	Data         any
+	Err          error
 }
 
 type ResultStore interface {
 	Get(id CheckID) (Result, bool)
 	GetForResource(id CheckID, resourceID string) (Result, bool)
-	FindingsBySeverity(min Severity) []Finding
+	Observations() []Observation
 	Resources() []Resource
 }
 

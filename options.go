@@ -11,7 +11,7 @@ type engineConfig struct {
 	maxConcurrency         int
 	maxResourceConcurrency int
 	defaultTimeout         time.Duration
-	reporter               Reporter
+	reporters              []Reporter
 	initialChecks          []Check
 }
 
@@ -21,7 +21,6 @@ func defaultConfig() engineConfig {
 		maxConcurrency:         cpus,
 		maxResourceConcurrency: cpus,
 		defaultTimeout:         defaultTimeout,
-		reporter:               NoopReporter{},
 	}
 }
 
@@ -53,16 +52,7 @@ func WithDefaultTimeout(d time.Duration) Option {
 
 func WithReporters(reporters ...Reporter) Option {
 	return func(cfg *engineConfig) {
-		switch len(reporters) {
-		case 0:
-			cfg.reporter = NoopReporter{}
-		case 1:
-			if reporters[0] != nil {
-				cfg.reporter = reporters[0]
-			}
-		default:
-			cfg.reporter = NewMultiReporter(reporters...)
-		}
+		cfg.reporters = reporters
 	}
 }
 

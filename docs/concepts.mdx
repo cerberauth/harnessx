@@ -1,6 +1,6 @@
 ---
 title: Core Concepts
-description: Understand checks, scopes, resources, and findings
+description: Understand checks, scopes, resources, and observations
 sidebar:
   order: 4
 ---
@@ -9,11 +9,11 @@ import { Card, CardGrid } from '@/components/docs'
 
 ## Checks
 
-A `Check` is a unit of security validation. Each check:
+A `Check` is a unit of work. Each check:
 - Has a unique ID across the engine
 - Runs within a scope (`ScopeGlobal` or `ScopePerResource`)
 - Can depend on other checks
-- Returns a `Result` with pass/fail status and optional findings
+- Returns a `Result` with pass/fail status and optional observations
 
 ```go
 type Check struct {
@@ -142,31 +142,30 @@ check := harnessx.Check{
 
 Available conditions:
 - `IfCheckPassed(id)` — run if check passed
-- `IfCheckFound(id)` — run if check was executed (passed or failed)
+- `IfCheckObserved(id)` — run if check produced at least one observation
 - `IfCheckSkipped(id)` — run if check was skipped
 - `All(conds...)` — all conditions must be true
 - `Any(conds...)` — at least one condition must be true
 - `Not(cond)` — negate a condition
 
-## Findings
+## Observations
 
-A `Finding` describes a security issue found by a check.
+An `Observation` describes an issue or noteworthy outcome found by a check.
 
 ```go
-type Finding struct {
-  CheckID      CheckID
-  Severity     Severity // info, low, medium, high, critical
-  Message      string
-  Evidence     string
-  Remediation  string
-  Metadata     map[string]any
+type Observation struct {
+  CheckID     CheckID
+  ResourceID  string
+  Title       string
+  Description string
+  Evidence    string
+  Metadata    map[string]string
 }
 
 type Result struct {
-  Passed    bool
-  Skipped   bool
-  Finding   Finding
-  Resources []Resource
+  Skipped      bool
+  Observations []Observation
+  Resources    []Resource
 }
 ```
 

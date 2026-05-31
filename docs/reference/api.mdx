@@ -37,22 +37,6 @@ Unique identifier for a check. Type alias for `string`.
 type CheckID string
 ```
 
-### Severity
-
-Finding severity level.
-
-```go
-type Severity string
-
-const (
-  SeverityInfo     Severity = "info"
-  SeverityLow      Severity = "low"
-  SeverityMedium   Severity = "medium"
-  SeverityHigh     Severity = "high"
-  SeverityCritical Severity = "critical"
-)
-```
-
 ### CheckScope
 
 Where a check runs.
@@ -66,18 +50,18 @@ const (
 )
 ```
 
-### Finding
+### Observation
 
-A security issue found by a check.
+An issue or noteworthy outcome found by a check.
 
 ```go
-type Finding struct {
-  CheckID      CheckID
-  Severity     Severity
-  Message      string
-  Evidence     string
-  Remediation  string
-  Metadata     map[string]any
+type Observation struct {
+  CheckID     CheckID
+  ResourceID  string
+  Title       string
+  Description string
+  Evidence    string
+  Metadata    map[string]string
 }
 ```
 
@@ -87,16 +71,17 @@ The result of a single check execution.
 
 ```go
 type Result struct {
-  Passed    bool
-  Skipped   bool
-  Finding   Finding
-  Resources []Resource
+  Skipped      bool
+  Observations []Observation
+  Resources    []Resource
+  Duration     time.Duration
+  Err          error
 }
 ```
 
 ### Check
 
-A security check to execute.
+A check to execute.
 
 ```go
 type Check struct {
@@ -131,7 +116,7 @@ type Condition interface {
 
 **Constructors:**
 - `IfCheckPassed(CheckID)` — run if check passed
-- `IfCheckFound(CheckID)` — run if check was executed
+- `IfCheckObserved(CheckID)` — run if check produced at least one observation
 - `IfCheckSkipped(CheckID)` — run if check was skipped
 - `All(...Condition)` — all conditions must be true
 - `Any(...Condition)` — at least one must be true
@@ -175,7 +160,20 @@ type Reporter interface {
 
 **Implementations:**
 - `NoopReporter` — does nothing (useful as default)
-- `MultiReporter` — fans out to multiple reporters via `NewMultiReporter(...)`
+- `reporters.OTelReporter` — emits spans and metrics via OpenTelemetry (`github.com/cerberauth/harnessx/reporters`)
+
+### OTelReporter
+
+```go
+// reporters sub-package
+func NewOTelReporter(ctx context.Context, tracer trace.Tracer, meter metric.Meter, opts ...OTelOption) *OTelReporter
+
+type OTelOption func(*otelConfig)
+
+func WithPrefix(prefix string) OTelOption
+```
+
+Metrics: `{prefix}.check.duration`, `{prefix}.check.executions`, `{prefix}.observations`, `{prefix}.scan.duration` (default prefix: `"harnessx"`).
 
 ### ScanError
 
@@ -335,20 +333,20 @@ if err != nil {
 }
 
 if summary.Failed > 0 {
-  println("Security issues found!")
+  println("Issues found!")
 }
 ```
 
-### Collect findings
+### Collect observations
 
 ```go
 type Collector struct {
-  findings []Finding
+  observations []Observation
 }
 
 func (c *Collector) OnCheckComplete(checkID string, result Result) {
-  if !result.Passed && result.Finding.CheckID != "" {
-    c.findings = append(c.findings, result.Finding)
+  if len(result.Observations) > 0 {
+    c.observations = append(c.observations, result.Observations...)
   }
 }
 
