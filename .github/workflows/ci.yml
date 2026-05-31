@@ -26,3 +26,4 @@ jobs:
       - uses: cerberauth/ci/actions/go-build-test@main
         with:
           codecov-token: ${{ secrets.CODECOV_TOKEN }}
+          exclude: "/examples/"
