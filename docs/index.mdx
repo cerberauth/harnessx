@@ -1,9 +1,9 @@
 ---
 title: harnessx
-description: Concurrent, dependency-aware security check orchestration engine for Go
+description: Concurrent, dependency-aware check orchestration engine for Go
 template: splash
 hero:
-  tagline: Build complex security scanning workflows. DAG scheduling, parallel execution, structured findings.
+  tagline: Build check workflows with DAG scheduling, parallel execution, and structured observations.
   actions:
     - text: Get started
       link: ./getting-started/
@@ -44,7 +44,7 @@ check := harnessx.Check{
   ID:       "check-1",
   Scope:    harnessx.ScopeGlobal,
   Run: func(ctx context.Context, _ harnessx.Target) (harnessx.Result, error) {
-    // Your security check logic here
+    // Your check logic here
     return harnessx.Result{Passed: true}, nil
   },
 }
@@ -65,12 +65,12 @@ summary, err := engine.Run(ctx, target)
   />
   <LinkCard
     title="Getting Started"
-    description="Write and run your first security checks in 5 minutes."
+    description="Write and run your first checks in 5 minutes."
     href="./getting-started/"
   />
   <LinkCard
     title="Concepts"
-    description="Understand checks, scopes, conditions, resources, and findings."
+    description="Understand checks, scopes, conditions, resources, and observations."
     href="./concepts/"
   />
   <LinkCard

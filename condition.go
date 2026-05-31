@@ -6,23 +6,17 @@ func IfCheckPassed(id CheckID) Condition {
 		if !ok {
 			return false
 		}
-		return !r.Skipped && r.Err == nil && len(r.Findings) == 0
+		return !r.Skipped && r.Err == nil && len(r.Observations) == 0
 	}
 }
 
-func IfCheckFound(id CheckID, min Severity) Condition {
-	minRank := severityRank[min]
+func IfCheckObserved(id CheckID) Condition {
 	return func(store ResultStore) bool {
 		r, ok := store.Get(id)
 		if !ok {
 			return false
 		}
-		for _, f := range r.Findings {
-			if severityRank[f.Severity] >= minRank {
-				return true
-			}
-		}
-		return false
+		return len(r.Observations) > 0
 	}
 }
 

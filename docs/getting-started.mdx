@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-description: Write and run your first security checks
+description: Write and run your first checks
 sidebar:
   order: 3
 ---
@@ -27,7 +27,7 @@ import { Steps, Aside } from '@/components/docs'
        ID:    "tls-enabled",
        Scope: harnessx.ScopeGlobal,
        Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
-         // Your security check logic
+         // Your check logic
          return harnessx.Result{Passed: true}, nil
        },
      }
@@ -58,27 +58,22 @@ import { Steps, Aside } from '@/components/docs'
    }
    ```
 
-3. **Define findings**
+3. **Define observations**
 
-   Checks return findings with severity levels:
+   Checks return observations describing what they found:
 
    ```go
    check := harnessx.Check{
      ID:    "weak-cipher",
      Scope: harnessx.ScopeGlobal,
-     Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
-       // Severity: info, low, medium, high, critical
-       finding := harnessx.Finding{
-         CheckID:     "weak-cipher",
-         Severity:    harnessx.SeverityHigh,
-         Message:     "Weak cipher suite detected",
-         Evidence:    "TLS_RSA_WITH_AES_128_CBC_SHA",
-         Remediation: "Use TLS 1.3 with AEAD ciphers",
-       }
-
+     Run: func(ctx context.Context, target harnessx.Target, _ harnessx.ResultStore) (harnessx.Result, error) {
        return harnessx.Result{
-         Passed: false,
-         Finding: finding,
+         Observations: []harnessx.Observation{{
+           CheckID:     "weak-cipher",
+           Title:       "Weak cipher suite detected",
+           Evidence:    "TLS_RSA_WITH_AES_128_CBC_SHA",
+           Description: "Use TLS 1.3 with AEAD ciphers",
+         }},
        }, nil
      },
    }
@@ -117,7 +112,7 @@ import { Steps, Aside } from '@/components/docs'
 
    // Check results
    if summary.Failed > 0 {
-     println("Security issues found!")
+     println("Issues found!")
    }
    ```
 

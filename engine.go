@@ -83,22 +83,13 @@ func (s *storeSnapshot) GetForResource(id CheckID, resourceID string) (Result, b
 	return r, ok
 }
 
-func (s *storeSnapshot) FindingsBySeverity(min Severity) []Finding {
-	minRank := severityRank[min]
-	var out []Finding
+func (s *storeSnapshot) Observations() []Observation {
+	var out []Observation
 	for _, r := range s.results {
-		for _, f := range r.Findings {
-			if severityRank[f.Severity] >= minRank {
-				out = append(out, f)
-			}
-		}
+		out = append(out, r.Observations...)
 	}
 	for _, r := range s.perRes {
-		for _, f := range r.Findings {
-			if severityRank[f.Severity] >= minRank {
-				out = append(out, f)
-			}
-		}
+		out = append(out, r.Observations...)
 	}
 	return out
 }
@@ -152,14 +143,16 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 	e.mu.RUnlock()
 
 	cfg := e.cfg
-	reporter := cfg.reporter
+	reporters := cfg.reporters
 
 	summary := ScanSummary{Target: target}
 
 	finalize := func(err error) (ScanSummary, error) {
 		summary.Duration = time.Since(start)
 		summary.Err = err
-		reporter.OnScanComplete(summary)
+		for _, r := range reporters {
+			r.OnScanComplete(summary)
+		}
 		return summary, err
 	}
 
@@ -217,7 +210,9 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 				if reason := chk.Skip.eval(ctx, target, snapshot); reason != "" {
 					skipped := Result{CheckID: chk.ID, Skipped: true, SkipReason: reason}
 					store.set(chk.ID, skipped)
-					reporter.OnCheckComplete(skipped)
+					for _, r := range reporters {
+						r.OnCheckComplete(skipped)
+					}
 					summaryMu.Lock()
 					summary.Skipped++
 					summary.Results = append(summary.Results, skipped)
@@ -229,7 +224,9 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 					if !cond(snapshot) {
 						skipped := Result{CheckID: chk.ID, Skipped: true}
 						store.set(chk.ID, skipped)
-						reporter.OnCheckComplete(skipped)
+						for _, r := range reporters {
+							r.OnCheckComplete(skipped)
+						}
 						summaryMu.Lock()
 						summary.Skipped++
 						summary.Results = append(summary.Results, skipped)
@@ -244,12 +241,16 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 				}
 
 				if chk.Scope == ScopeGlobal {
-					reporter.OnCheckStart(chk, target)
+					for _, r := range reporters {
+						r.OnCheckStart(chk, target, nil)
+					}
 					result := runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
 						return chk.Run(checkCtx, target, snapshot)
 					})
 					result.CheckID = chk.ID
-					reporter.OnCheckComplete(result)
+					for _, r := range reporters {
+						r.OnCheckComplete(result)
+					}
 					store.set(chk.ID, result)
 					store.mergeResources(result.Resources)
 
@@ -259,7 +260,7 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 					} else {
 						summary.Executed++
 					}
-					summary.Findings = append(summary.Findings, result.Findings...)
+					summary.Observations = append(summary.Observations, result.Observations...)
 					summary.Results = append(summary.Results, result)
 					summaryMu.Unlock()
 					return
@@ -269,7 +270,9 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 				if len(resources) == 0 {
 					skipped := Result{CheckID: chk.ID, Skipped: true}
 					store.set(chk.ID, skipped)
-					reporter.OnCheckComplete(skipped)
+					for _, r := range reporters {
+						r.OnCheckComplete(skipped)
+					}
 					summaryMu.Lock()
 					summary.Skipped++
 					summary.Results = append(summary.Results, skipped)
@@ -293,13 +296,17 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 						}
 						defer resSem.Release()
 
-						reporter.OnCheckStart(chk, target)
+						for _, r := range reporters {
+							r.OnCheckStart(chk, target, &res)
+						}
 						result := runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
 							return chk.RunResource(checkCtx, target, res, snapshot)
 						})
 						result.CheckID = chk.ID
 						result.ResourceID = res.ID
-						reporter.OnCheckComplete(result)
+						for _, r := range reporters {
+							r.OnCheckComplete(result)
+						}
 						store.setForResource(chk.ID, res.ID, result)
 						store.mergeResources(result.Resources)
 
@@ -309,7 +316,7 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 						} else {
 							summary.Executed++
 						}
-						summary.Findings = append(summary.Findings, result.Findings...)
+						summary.Observations = append(summary.Observations, result.Observations...)
 						summary.Results = append(summary.Results, result)
 						summaryMu.Unlock()
 					}()
@@ -330,7 +337,9 @@ func runSafe(ctx context.Context, timeout time.Duration, fn func(context.Context
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	start := time.Now()
 	defer func() {
+		result.Duration = time.Since(start)
 		if r := recover(); r != nil {
 			result.Err = &ScanError{Cause: fmt.Errorf("panic: %v", r)}
 		}

@@ -4,7 +4,6 @@ import (
 	"testing"
 )
 
-// staticStore is a minimal ResultStore for condition testing.
 type staticStore struct {
 	results map[CheckID]Result
 }
@@ -27,15 +26,10 @@ func (s *staticStore) GetForResource(id CheckID, _ string) (Result, bool) {
 	return r, ok
 }
 
-func (s *staticStore) FindingsBySeverity(min Severity) []Finding {
-	minRank := severityRank[min]
-	var out []Finding
+func (s *staticStore) Observations() []Observation {
+	var out []Observation
 	for _, r := range s.results {
-		for _, f := range r.Findings {
-			if severityRank[f.Severity] >= minRank {
-				out = append(out, f)
-			}
-		}
+		out = append(out, r.Observations...)
 	}
 	return out
 }
@@ -44,16 +38,16 @@ func (s *staticStore) Resources() []Resource { return nil }
 
 func TestIfCheckPassed(t *testing.T) {
 	store := newStaticStore(
-		Result{CheckID: "ok", Findings: nil, Err: nil},
-		Result{CheckID: "withFindings", Findings: []Finding{{Severity: SeverityLow}}},
+		Result{CheckID: "ok", Observations: nil, Err: nil},
+		Result{CheckID: "withObservations", Observations: []Observation{{Title: "something"}}},
 		Result{CheckID: "skipped", Skipped: true},
 	)
 
 	if !IfCheckPassed("ok")(store) {
 		t.Error("IfCheckPassed(ok) should be true")
 	}
-	if IfCheckPassed("withFindings")(store) {
-		t.Error("IfCheckPassed(withFindings) should be false")
+	if IfCheckPassed("withObservations")(store) {
+		t.Error("IfCheckPassed(withObservations) should be false")
 	}
 	if IfCheckPassed("skipped")(store) {
 		t.Error("IfCheckPassed(skipped) should be false")
@@ -63,34 +57,26 @@ func TestIfCheckPassed(t *testing.T) {
 	}
 }
 
-func TestIfCheckFound(t *testing.T) {
+func TestIfCheckObserved(t *testing.T) {
 	store := newStaticStore(
 		Result{
-			CheckID: "withHigh",
-			Findings: []Finding{
-				{Severity: SeverityHigh},
-			},
+			CheckID:      "withObs",
+			Observations: []Observation{{Title: "issue found"}},
 		},
 		Result{
-			CheckID:  "noFindings",
-			Findings: nil,
+			CheckID:      "noObs",
+			Observations: nil,
 		},
 	)
 
-	if !IfCheckFound("withHigh", SeverityMedium)(store) {
-		t.Error("IfCheckFound(withHigh, medium) should be true")
+	if !IfCheckObserved("withObs")(store) {
+		t.Error("IfCheckObserved(withObs) should be true")
 	}
-	if !IfCheckFound("withHigh", SeverityHigh)(store) {
-		t.Error("IfCheckFound(withHigh, high) should be true")
+	if IfCheckObserved("noObs")(store) {
+		t.Error("IfCheckObserved(noObs) should be false")
 	}
-	if IfCheckFound("withHigh", SeverityCritical)(store) {
-		t.Error("IfCheckFound(withHigh, critical) should be false")
-	}
-	if IfCheckFound("noFindings", SeverityInfo)(store) {
-		t.Error("IfCheckFound(noFindings, info) should be false")
-	}
-	if IfCheckFound("missing", SeverityInfo)(store) {
-		t.Error("IfCheckFound(missing, info) should be false")
+	if IfCheckObserved("missing")(store) {
+		t.Error("IfCheckObserved(missing) should be false")
 	}
 }
 

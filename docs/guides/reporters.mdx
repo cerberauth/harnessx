@@ -62,7 +62,7 @@ engine := harnessx.New(
 type ResultCollector struct {
   passed   []string
   failed   []string
-  findings []harnessx.Finding
+  observations []harnessx.Observation
 }
 
 func (r *ResultCollector) OnCheckStart(checkID string) {
@@ -74,8 +74,8 @@ func (r *ResultCollector) OnCheckComplete(checkID string, result harnessx.Result
     r.passed = append(r.passed, checkID)
   } else if !result.Skipped {
     r.failed = append(r.failed, checkID)
-    if result.Finding.CheckID != "" {
-      r.findings = append(r.findings, result.Finding)
+    if len(result.Observations) > 0 {
+      r.observations = append(r.observations, result.Observations...)
     }
   }
 }
@@ -88,8 +88,8 @@ collector := &ResultCollector{}
 engine := harnessx.New(harnessx.WithReporters(collector))
 
 // After scan
-for _, finding := range collector.findings {
-  println(finding.Severity, ":", finding.Message)
+for _, obs := range collector.observations {
+  println(obs.Title, ":", obs.Description)
 }
 ```
 
@@ -113,8 +113,8 @@ func (r *JSONReporter) OnCheckComplete(checkID string, result harnessx.Result) {
       r.checks[i]["end"] = time.Now()
       r.checks[i]["passed"] = result.Passed
       r.checks[i]["skipped"] = result.Skipped
-      if result.Finding.CheckID != "" {
-        r.checks[i]["finding"] = result.Finding
+      if len(result.Observations) > 0 {
+        r.checks[i]["observations"] = result.Observations
       }
       break
     }
@@ -178,17 +178,45 @@ engine := harnessx.New(
 )
 ```
 
-For dynamic reporter lists, use `NewMultiReporter`:
+For dynamic reporter lists, spread the slice:
 
 ```go
-var reporters []harnessx.Reporter
-reporters = append(reporters, &SimpleReporter{})
-reporters = append(reporters, &ResultCollector{})
+var list []harnessx.Reporter
+list = append(list, &SimpleReporter{})
+list = append(list, &ResultCollector{})
 
 engine := harnessx.New(
-  harnessx.WithReporters(harnessx.NewMultiReporter(reporters...)),
+  harnessx.WithReporters(list...),
 )
 ```
+
+## OpenTelemetry reporter
+
+The `reporters` sub-package provides `OTelReporter`, which emits spans and metrics via OpenTelemetry.
+
+```go
+import "github.com/cerberauth/harnessx/reporters"
+
+otelReporter := reporters.NewOTelReporter(ctx, tracer, meter)
+
+// Optional: override the default "harnessx" metric/span prefix
+otelReporter := reporters.NewOTelReporter(ctx, tracer, meter,
+  reporters.WithPrefix("myapp"),
+)
+
+engine := harnessx.New(
+  harnessx.WithReporters(otelReporter),
+)
+```
+
+Metrics emitted (prefix defaults to `harnessx`):
+
+| Metric | Description |
+|--------|-------------|
+| `{prefix}.check.duration` | Per-check execution time |
+| `{prefix}.check.executions` | Count of check executions |
+| `{prefix}.observations` | Count of observations emitted |
+| `{prefix}.scan.duration` | Total scan duration |
 
 ## Best practices
 

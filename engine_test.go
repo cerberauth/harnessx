@@ -17,7 +17,7 @@ type testReporter struct {
 	summary   *ScanSummary
 }
 
-func (r *testReporter) OnCheckStart(c Check, _ Target) {
+func (r *testReporter) OnCheckStart(c Check, _ Target, _ *Resource) {
 	r.mu.Lock()
 	r.starts = append(r.starts, c.ID)
 	r.mu.Unlock()
@@ -53,7 +53,7 @@ func TestEngine_DependencyAndSkipFlow(t *testing.T) {
 	checkA := Check{
 		ID: "A",
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
-			return Result{CheckID: "A"}, nil // no findings
+			return Result{CheckID: "A"}, nil // no observations
 		},
 	}
 	// B: global, depends A
@@ -68,7 +68,7 @@ func TestEngine_DependencyAndSkipFlow(t *testing.T) {
 	checkC := Check{
 		ID:         "C",
 		DependsOn:  []CheckID{"A"},
-		Conditions: []Condition{IfCheckFound("A", SeverityLow)},
+		Conditions: []Condition{IfCheckObserved("A")},
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
 			return Result{CheckID: "C"}, nil
 		},

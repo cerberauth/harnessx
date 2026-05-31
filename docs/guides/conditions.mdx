@@ -22,14 +22,13 @@ check := harnessx.Check{
 }
 ```
 
-### Skip if check failed or was skipped
+### Run if check produced observations
 
 ```go
 check := harnessx.Check{
-  ID:        "check-cipher",
-  Condition: harnessx.IfCheckFound("validate-tls"),
-  // Runs if "validate-tls" was executed (passed or failed)
-  // Does NOT run if "validate-tls" was skipped
+  ID:        "deep-probe",
+  Condition: harnessx.IfCheckObserved("initial-check"),
+  // Runs if "initial-check" produced at least one observation
 }
 ```
 
