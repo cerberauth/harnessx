@@ -232,6 +232,12 @@ engine := harnessx.New(
 
 ---
 
+## Examples
+
+- [Advanced Security Scan](./examples/advanced-scan/main.go): A comprehensive example demonstrating multi-level dependencies, resource discovery, custom conditions, and a pretty-printing reporter.
+
+---
+
 ## API Reference
 
 ### Engine
