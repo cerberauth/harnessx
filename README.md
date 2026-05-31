@@ -1,19 +1,10 @@
-<h1 align="center">harnessx</h1>
+# harnessx
 
-<p align="center">
-  <a href="https://github.com/cerberauth/harnessx/actions/workflows/ci.yml"><img src="https://github.com/cerberauth/harnessx/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://pkg.go.dev/github.com/cerberauth/harnessx"><img src="https://pkg.go.dev/badge/github.com/cerberauth/harnessx.svg" alt="Go Reference"></a>
-  <a href="https://goreportcard.com/report/github.com/cerberauth/harnessx"><img src="https://goreportcard.com/badge/github.com/cerberauth/harnessx" alt="Go Report Card"></a>
-  <a href="https://github.com/cerberauth/harnessx/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cerberauth/harnessx" alt="License"></a>
-</p>
-
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#concepts">Concepts</a> •
-  <a href="#api-reference">API Reference</a>
-</p>
+[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/cerberauth/harnessx/ci.yml?branch=main&label=core%20build&style=for-the-badge)](https://github.com/cerberauth/harnessx/actions/workflows/ci.yml)
+![Latest version](https://img.shields.io/github/v/release/cerberauth/harnessx?sort=semver&style=for-the-badge)
+![Codecov](https://img.shields.io/codecov/c/gh/cerberauth/harnessx?token=BD1WPXJDAW&style=for-the-badge)
+[![Go Report Card](https://goreportcard.com/badge/github.com/cerberauth/harnessx?style=for-the-badge)](https://goreportcard.com/report/github.com/cerberauth/harnessx)
+[![GoDoc reference](https://img.shields.io/badge/godoc-reference-5272B4.svg?style=for-the-badge)](https://godoc.org/github.com/cerberauth/harnessx)
 
 **harnessx** is a concurrent, dependency-aware security check orchestration engine for Go. It lets you define a graph of security checks with explicit dependencies, run them in parallel waves, and collect structured findings — without writing any scheduling or concurrency boilerplate.
 
@@ -285,4 +276,5 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error)
 
 ## License
 
-harnessx is licensed under the [MIT License](LICENSE).
+This repository is licensed under the [MIT License](https://github.com/cerberauth/harnessx/blob/main/LICENSE) @ [CerberAuth](https://www.cerberauth.com/).
+
