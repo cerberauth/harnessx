@@ -1,0 +1,365 @@
+---
+title: API Reference
+description: Complete type and function documentation
+sidebar:
+  order: 1
+---
+
+## Types
+
+### Target
+
+Represents what you're scanning.
+
+```go
+type Target struct {
+  ID string
+}
+```
+
+### Resource
+
+Discovered by checks and consumed by dependent per-resource checks.
+
+```go
+type Resource struct {
+  ID       string
+  Type     string
+  Metadata map[string]any
+}
+```
+
+### CheckID
+
+Unique identifier for a check. Type alias for `string`.
+
+```go
+type CheckID string
+```
+
+### Severity
+
+Finding severity level.
+
+```go
+type Severity string
+
+const (
+  SeverityInfo     Severity = "info"
+  SeverityLow      Severity = "low"
+  SeverityMedium   Severity = "medium"
+  SeverityHigh     Severity = "high"
+  SeverityCritical Severity = "critical"
+)
+```
+
+### CheckScope
+
+Where a check runs.
+
+```go
+type CheckScope string
+
+const (
+  ScopeGlobal      CheckScope = "global"
+  ScopePerResource CheckScope = "per-resource"
+)
+```
+
+### Finding
+
+A security issue found by a check.
+
+```go
+type Finding struct {
+  CheckID      CheckID
+  Severity     Severity
+  Message      string
+  Evidence     string
+  Remediation  string
+  Metadata     map[string]any
+}
+```
+
+### Result
+
+The result of a single check execution.
+
+```go
+type Result struct {
+  Passed    bool
+  Skipped   bool
+  Finding   Finding
+  Resources []Resource
+}
+```
+
+### Check
+
+A security check to execute.
+
+```go
+type Check struct {
+  ID          CheckID
+  Scope       CheckScope
+  Timeout     time.Duration
+  DependsOn   []CheckID
+  Condition   Condition
+  Run         func(context.Context, Target) (Result, error)
+  RunResource func(context.Context, Target, Resource) (Result, error)
+}
+```
+
+**Fields:**
+- `ID`: Unique identifier (required)
+- `Scope`: `ScopeGlobal` or `ScopePerResource` (required)
+- `Timeout`: Max execution time (optional, no timeout if 0)
+- `DependsOn`: List of check IDs this depends on (optional)
+- `Condition`: Skip condition (optional)
+- `Run`: Function to run for global checks (required if `Scope == ScopeGlobal`)
+- `RunResource`: Function to run for per-resource checks (required if `Scope == ScopePerResource`)
+
+### Condition
+
+A predicate that determines if a check should run.
+
+```go
+type Condition interface {
+  Eval(context.Context, ResultStore) bool
+}
+```
+
+**Constructors:**
+- `IfCheckPassed(CheckID)` — run if check passed
+- `IfCheckFound(CheckID)` — run if check was executed
+- `IfCheckSkipped(CheckID)` — run if check was skipped
+- `All(...Condition)` — all conditions must be true
+- `Any(...Condition)` — at least one must be true
+- `Not(Condition)` — negate condition
+
+### ResultStore
+
+Read-only view of check results. Available to reporters and conditions.
+
+```go
+type ResultStore interface {
+  Get(CheckID) Result
+  All() map[CheckID]Result
+}
+```
+
+### ScanSummary
+
+Summary of scan results.
+
+```go
+type ScanSummary struct {
+  Total   int
+  Passed  int
+  Failed  int
+  Skipped int
+}
+```
+
+### Reporter
+
+Callback interface for tracking scan progress.
+
+```go
+type Reporter interface {
+  OnCheckStart(checkID string)
+  OnCheckComplete(checkID string, result Result)
+  OnScanComplete(summary ScanSummary)
+}
+```
+
+**Implementations:**
+- `NoopReporter` — does nothing (useful as default)
+- `MultiReporter` — fans out to multiple reporters via `NewMultiReporter(...)`
+
+### ScanError
+
+Error returned by `Engine.Run()`.
+
+```go
+type ScanError struct {
+  Err error // Underlying error
+}
+
+// Common error types:
+var (
+  ErrCycleDetected      // Circular dependency found
+  ErrDuplicateCheckID   // Two checks have same ID
+  ErrUnknownDependency  // Dependency not registered
+  ErrNoChecks           // No checks registered
+)
+```
+
+### Engine
+
+Main orchestration engine.
+
+```go
+type Engine struct {
+  // Private fields
+}
+```
+
+**Methods:**
+
+#### New
+
+Create a new engine.
+
+```go
+func New(opts ...Option) *Engine
+```
+
+**Example:**
+```go
+engine := harnessx.New(
+  harnessx.WithMaxConcurrency(4),
+  harnessx.WithReporters(myReporter, otherReporter),
+)
+```
+
+#### Register
+
+Register one or more checks.
+
+```go
+func (e *Engine) Register(checks ...Check) error
+```
+
+**Returns:**
+- `ErrDuplicateCheckID` if a check with the same ID exists
+- `ErrCycleDetected` if adding the check would create a cycle
+- `ErrUnknownDependency` if a dependency doesn't exist
+
+**Example:**
+```go
+err := engine.Register(check1, check2)
+if err != nil {
+  panic(err)
+}
+```
+
+#### Run
+
+Execute all registered checks against a target.
+
+```go
+func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error)
+```
+
+**Returns:**
+- `ScanSummary` with counts of passed, failed, skipped
+- `ScanError` on validation failure or check panic
+
+**Example:**
+```go
+ctx := context.Background()
+summary, err := engine.Run(ctx, target)
+if err != nil {
+  println("Scan error:", err)
+}
+```
+
+## Options
+
+### WithMaxConcurrency
+
+Set max concurrent checks per level.
+
+```go
+func WithMaxConcurrency(n int) Option
+```
+
+**Default:** `1` (sequential execution)
+
+### WithMaxResourceConcurrency
+
+Set max concurrent per-resource checks.
+
+```go
+func WithMaxResourceConcurrency(n int) Option
+```
+
+**Default:** `1` (sequential execution)
+
+### WithReporters
+
+Set one or more reporter callbacks. Multiple reporters are automatically fanned out.
+
+```go
+func WithReporters(reporters ...Reporter) Option
+```
+
+**Default:** `NoopReporter()` if no reporters provided
+
+## Execution Flow
+
+1. **Validate**: Check for duplicates, missing dependencies, cycles
+2. **Topological Sort**: Order checks into dependency levels using Kahn's algorithm
+3. **Execute Levels**: For each level:
+   - Take snapshot of prior results
+   - Run independent checks in parallel (bounded by `MaxConcurrency`)
+   - Wait for level to complete
+4. **Per-Resource Checks**: For checks with `ScopePerResource`:
+   - For each resource from dependencies:
+     - Run check (bounded by `MaxResourceConcurrency`)
+5. **Callbacks**: Call reporter on each start/complete, then on scan complete
+
+## Error Handling
+
+### Panics
+
+If a check panics, the panic is recovered and recorded as a `ScanError`. The scan continues.
+
+### Timeouts
+
+If a check exceeds its timeout, it returns `context.DeadlineExceeded`. The check fails but the scan continues.
+
+### Context Cancellation
+
+If the root context is canceled, all running checks are canceled. The scan returns the context error.
+
+## Common Patterns
+
+### Check if scan succeeded
+
+```go
+summary, err := engine.Run(ctx, target)
+if err != nil {
+  panic(err)
+}
+
+if summary.Failed > 0 {
+  println("Security issues found!")
+}
+```
+
+### Collect findings
+
+```go
+type Collector struct {
+  findings []Finding
+}
+
+func (c *Collector) OnCheckComplete(checkID string, result Result) {
+  if !result.Passed && result.Finding.CheckID != "" {
+    c.findings = append(c.findings, result.Finding)
+  }
+}
+
+// ... use with engine
+```
+
+### Timeout entire scan
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+defer cancel()
+
+summary, err := engine.Run(ctx, target)
+```

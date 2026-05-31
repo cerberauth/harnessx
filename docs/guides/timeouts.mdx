@@ -1,0 +1,132 @@
+---
+title: Timeouts and Concurrency
+description: Control check execution time and parallelism
+sidebar:
+  order: 5
+---
+
+## Per-check timeouts
+
+Each check can have its own timeout:
+
+```go
+check := harnessx.Check{
+  ID:      "fetch-cert",
+  Timeout: 5 * time.Second,
+  Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+    // This check is canceled if it runs longer than 5 seconds
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+```
+
+If a check exceeds its timeout, it returns a `ScanError` and the scan stops (unless you handle it).
+
+## Global context timeout
+
+Use a context to timeout the entire scan:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+summary, err := engine.Run(ctx, target)
+if errors.Is(err, context.DeadlineExceeded) {
+  println("Scan exceeded 30 seconds")
+}
+```
+
+## Concurrency control
+
+### Level-wide concurrency
+
+Limit how many checks run in parallel at each dependency level:
+
+```go
+engine := harnessx.New(
+  harnessx.WithMaxConcurrency(4),  // Max 4 checks at once
+)
+```
+
+### Per-resource concurrency
+
+Limit how many per-resource checks run in parallel:
+
+```go
+engine := harnessx.New(
+  harnessx.WithMaxResourceConcurrency(8),  // Max 8 resources at once
+)
+```
+
+### Both together
+
+```go
+// Level concurrency: 4
+// Resource concurrency: 8
+// Total: up to 4 × 8 = 32 concurrent operations
+engine := harnessx.New(
+  harnessx.WithMaxConcurrency(4),
+  harnessx.WithMaxResourceConcurrency(8),
+)
+```
+
+## Timeout behavior
+
+When a check times out:
+
+1. The check's context is canceled
+2. The check is recorded as failed (if not already panicked)
+3. The scan continues with dependent checks
+4. The timeout is recorded in the `ScanError` if no checks were registered
+
+```go
+check := harnessx.Check{
+  ID:      "slow-check",
+  Timeout: 1 * time.Second,
+  Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+    select {
+    case <-time.After(2 * time.Second):
+      return harnessx.Result{Passed: true}, nil
+    case <-ctx.Done():
+      // Context canceled due to timeout
+      return harnessx.Result{Passed: false}, ctx.Err()
+    }
+  },
+}
+```
+
+## Best practices
+
+- Set per-check timeouts for I/O-bound checks (network, file operations)
+- Use a global context timeout for interactive scans
+- Start with conservative concurrency limits and increase if you see headroom
+- Monitor timeout errors to identify slow checks
+- Use context cancellation signals properly:
+  ```go
+  select {
+  case result := <-someChannel:
+    return result
+  case <-ctx.Done():
+    return ctx.Err()
+  }
+  ```
+
+## Example: adaptive timeout
+
+```go
+getTimeout := func(checkID string) time.Duration {
+  switch checkID {
+  case "network-check":
+    return 10 * time.Second
+  case "cpu-check":
+    return 5 * time.Second
+  default:
+    return 30 * time.Second
+  }
+}
+
+checks := []harnessx.Check{
+  {ID: "network-check", Timeout: getTimeout("network-check"), ...},
+  {ID: "cpu-check", Timeout: getTimeout("cpu-check"), ...},
+}
+```

@@ -3,10 +3,11 @@ package probe
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"strconv"
 	"time"
@@ -241,7 +242,11 @@ func backoffDuration(base time.Duration, attempt int) time.Duration {
 	slot := base * (1 << min(attempt, 10))
 	const maxSlot = 60 * time.Second
 	slot = min(slot, maxSlot)
-	return time.Duration(rand.Int63n(int64(slot) + 1))
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(slot)+1))
+	if err != nil {
+		return slot
+	}
+	return time.Duration(n.Int64())
 }
 
 // sleepCtx waits for d to elapse or ctx to be cancelled, whichever comes first.

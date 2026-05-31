@@ -1,0 +1,144 @@
+---
+title: Conditional Execution
+description: Skip checks based on prior results
+sidebar:
+  order: 3
+---
+
+## Overview
+
+Conditions let you skip a check based on the result of a dependency, without creating explicit dependencies in the dependency graph.
+
+## Basic conditions
+
+### Skip if check passed
+
+```go
+check := harnessx.Check{
+  ID:        "validate-cert-dates",
+  Scope:     harnessx.ScopeGlobal,
+  Condition: harnessx.IfCheckPassed("fetch-cert"),
+  // Only runs if "fetch-cert" passed
+}
+```
+
+### Skip if check failed or was skipped
+
+```go
+check := harnessx.Check{
+  ID:        "check-cipher",
+  Condition: harnessx.IfCheckFound("validate-tls"),
+  // Runs if "validate-tls" was executed (passed or failed)
+  // Does NOT run if "validate-tls" was skipped
+}
+```
+
+### Skip if check was skipped
+
+```go
+check := harnessx.Check{
+  ID:        "enable-feature",
+  Condition: harnessx.IfCheckSkipped("check-precondition"),
+  // Only runs if "check-precondition" was skipped
+}
+```
+
+## Composing conditions
+
+### All conditions must be true
+
+```go
+check := harnessx.Check{
+  ID: "validate-prod-certs",
+  Condition: harnessx.All(
+    harnessx.IfCheckPassed("is-production"),
+    harnessx.IfCheckPassed("fetch-cert"),
+  ),
+  // Runs only if both checks passed
+}
+```
+
+### At least one condition is true
+
+```go
+check := harnessx.Check{
+  ID: "validate-endpoints",
+  Condition: harnessx.Any(
+    harnessx.IfCheckPassed("discover-openapi"),
+    harnessx.IfCheckPassed("discover-graphql"),
+  ),
+  // Runs if either discovery check passed
+}
+```
+
+### Negate a condition
+
+```go
+check := harnessx.Check{
+  ID: "use-fallback-method",
+  Condition: harnessx.Not(
+    harnessx.IfCheckPassed("primary-method"),
+  ),
+  // Runs only if "primary-method" did NOT pass
+}
+```
+
+### Complex conditions
+
+```go
+check := harnessx.Check{
+  ID: "validate-legacy-endpoints",
+  Condition: harnessx.All(
+    harnessx.Any(
+      harnessx.IfCheckPassed("discover-rest"),
+      harnessx.IfCheckPassed("discover-soap"),
+    ),
+    harnessx.Not(
+      harnessx.IfCheckPassed("api-deprecated"),
+    ),
+  ),
+  // Runs if: (REST OR SOAP discovered) AND API is NOT deprecated
+}
+```
+
+## Conditions vs dependencies
+
+Use conditions when you want to **optionally** run a check.
+Use dependencies when a check **must** run first (you need its results).
+
+```go
+// Dependencies: B must run, A must complete first
+checkA := harnessx.Check{ID: "a", ...}
+checkB := harnessx.Check{ID: "b", DependsOn: []harnessx.CheckID{"a"}, ...}
+
+// Conditions: C is optional, only runs if A passed
+checkC := harnessx.Check{
+  ID:        "c",
+  Condition: harnessx.IfCheckPassed("a"),
+  ...
+}
+```
+
+## Accessing condition results
+
+To use results from a condition check, add it to `DependsOn`:
+
+```go
+check := harnessx.Check{
+  ID:        "validate-dates",
+  DependsOn: []harnessx.CheckID{"fetch-cert"},  // Explicit dependency
+  Condition: harnessx.IfCheckPassed("fetch-cert"),
+  Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+    // Can now access fetch-cert result via reporter
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+```
+
+## Best practices
+
+- Use conditions to handle optional or feature-flag checks
+- Use dependencies for critical prerequisite checks
+- Keep condition logic simple (use `All` / `Any` / `Not`)
+- Document why a check has a condition (e.g., "only for HTTPS targets")
+- Test both the condition-true and condition-false paths

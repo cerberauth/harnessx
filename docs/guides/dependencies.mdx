@@ -1,0 +1,121 @@
+---
+title: Check Dependencies
+description: Build complex workflows using DAG scheduling
+sidebar:
+  order: 1
+---
+
+import { Steps, Aside } from '@/components/docs'
+
+## Overview
+
+Checks can depend on other checks. The engine automatically detects and executes them in the correct order, running independent checks in parallel whenever possible.
+
+## Basic dependency
+
+Define a dependency with `DependsOn`:
+
+```go
+checkA := harnessx.Check{
+  ID:    "a",
+  Scope: harnessx.ScopeGlobal,
+  Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+
+checkB := harnessx.Check{
+  ID:        "b",
+  Scope:     harnessx.ScopeGlobal,
+  DependsOn: []harnessx.CheckID{"a"},  // B waits for A
+  Run: func(ctx context.Context, target harnessx.Target) (harnessx.Result, error) {
+    // B only runs after A completes
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+
+engine := harnessx.New()
+engine.Register(checkA, checkB)
+```
+
+## Parallel execution
+
+Independent checks run in parallel. The engine organizes checks into **levels**:
+
+```go
+//  Level 0: A, B (parallel)
+//  ↓
+//  Level 1: C, D (parallel, both depend on A or B)
+//  ↓
+//  Level 2: E (depends on C or D)
+
+checkA := harnessx.Check{ID: "a", ...}
+checkB := harnessx.Check{ID: "b", ...}
+checkC := harnessx.Check{ID: "c", DependsOn: []harnessx.CheckID{"a"}, ...}
+checkD := harnessx.Check{ID: "d", DependsOn: []harnessx.CheckID{"b"}, ...}
+checkE := harnessx.Check{ID: "e", DependsOn: []harnessx.CheckID{"c", "d"}, ...}
+
+engine.Register(checkA, checkB, checkC, checkD, checkE)
+```
+
+## Error handling
+
+The engine detects invalid dependency graphs at scan time:
+
+### Circular dependency
+
+```go
+// ❌ Not allowed
+checkA := harnessx.Check{ID: "a", DependsOn: []harnessx.CheckID{"b"}, ...}
+checkB := harnessx.Check{ID: "b", DependsOn: []harnessx.CheckID{"a"}, ...}
+
+// Returns harnessx.ErrCycleDetected
+```
+
+### Unknown dependency
+
+```go
+// ❌ Not allowed
+checkA := harnessx.Check{ID: "a", DependsOn: []harnessx.CheckID{"nonexistent"}, ...}
+
+// Returns harnessx.ErrUnknownDependency
+```
+
+### Duplicate ID
+
+```go
+// ❌ Not allowed
+checkA1 := harnessx.Check{ID: "a", ...}
+checkA2 := harnessx.Check{ID: "a", ...}
+
+engine.Register(checkA1, checkA2)
+// Returns harnessx.ErrDuplicateCheckID
+```
+
+## Accessing prior results
+
+To use the result of a dependency, access it from the result store via a `Reporter`:
+
+```go
+type ScanReporter struct {
+  results harnessx.ResultStore
+}
+
+func (r *ScanReporter) OnCheckStart(checkID string) {
+  // Before running check with dependencies, results are available
+  if checkID == "b" {
+    // Access result of check "a"
+    resultA := r.results.Get("a")
+    println("Check A result:", resultA.Passed)
+  }
+}
+
+engine := harnessx.New(harnessx.WithReporters(&ScanReporter{}))
+```
+
+## Best practices
+
+- Keep dependency chains shallow (3-4 levels max)
+- Group related checks together at the same level
+- Use [conditions](./conditions/) to conditionally skip checks instead of deep chains
+- Document why a check depends on another (e.g., "needs TLS cert to validate cert dates")

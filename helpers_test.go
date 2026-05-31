@@ -118,9 +118,11 @@ func TestDataAs_StructType(t *testing.T) {
 	}
 }
 
+const testCheckID = "dep"
+
 func TestGetData_Found(t *testing.T) {
-	store := newStaticStore(ResultData("dep", "value"))
-	v, ok := GetData[string](store, "dep")
+	store := newStaticStore(ResultData(testCheckID, "value"))
+	v, ok := GetData[string](store, testCheckID)
 	if !ok {
 		t.Fatal("GetData should succeed")
 	}
@@ -141,16 +143,16 @@ func TestGetData_CheckNotInStore(t *testing.T) {
 }
 
 func TestGetData_WrongType(t *testing.T) {
-	store := newStaticStore(ResultData("dep", 42))
-	_, ok := GetData[string](store, "dep")
+	store := newStaticStore(ResultData(testCheckID, 42))
+	_, ok := GetData[string](store, testCheckID)
 	if ok {
 		t.Error("GetData should fail when stored type does not match")
 	}
 }
 
 func TestGetData_NilDataInResult(t *testing.T) {
-	store := newStaticStore(Result{CheckID: "dep"})
-	_, ok := GetData[string](store, "dep")
+	store := newStaticStore(Result{CheckID: testCheckID})
+	_, ok := GetData[string](store, testCheckID)
 	if ok {
 		t.Error("GetData should fail when result carries no data")
 	}
@@ -158,8 +160,8 @@ func TestGetData_NilDataInResult(t *testing.T) {
 
 func TestGetData_StructPayload(t *testing.T) {
 	type info struct{ Status int }
-	store := newStaticStore(ResultData("dep", info{Status: 404}))
-	v, ok := GetData[info](store, "dep")
+	store := newStaticStore(ResultData(testCheckID, info{Status: 404}))
+	v, ok := GetData[info](store, testCheckID)
 	if !ok {
 		t.Fatal("GetData should succeed for struct payload")
 	}

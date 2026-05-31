@@ -11,10 +11,10 @@ import (
 
 // testReporter records all events.
 type testReporter struct {
-	mu       sync.Mutex
-	starts   []CheckID
+	mu        sync.Mutex
+	starts    []CheckID
 	completes []Result
-	summary  *ScanSummary
+	summary   *ScanSummary
 }
 
 func (r *testReporter) OnCheckStart(c Check, _ Target) {
@@ -47,7 +47,7 @@ var testTarget = Target{URL: "http://example.com", Host: "example.com"}
 
 func TestEngine_DependencyAndSkipFlow(t *testing.T) {
 	rep := &testReporter{}
-	e := New(WithReporter(rep), WithDefaultTimeout(5*time.Second))
+	e := New(WithReporters(rep), WithDefaultTimeout(5*time.Second))
 
 	// A: global, no deps, no findings
 	checkA := Check{
@@ -109,11 +109,16 @@ func TestEngine_DependencyAndSkipFlow(t *testing.T) {
 	}
 }
 
+const (
+	checkIDRecon    = "recon"
+	checkIDEndpoint = "endpoint"
+)
+
 // ── Integration Test 2: Resource discovery + per-resource dispatch ─────────────
 
 func TestEngine_ResourceDiscovery(t *testing.T) {
 	rep := &testReporter{}
-	e := New(WithReporter(rep), WithDefaultTimeout(5*time.Second))
+	e := New(WithReporters(rep), WithDefaultTimeout(5*time.Second))
 
 	resources := []Resource{
 		{ID: "r1", URL: "http://example.com/r1"},
@@ -122,9 +127,9 @@ func TestEngine_ResourceDiscovery(t *testing.T) {
 	}
 
 	recon := Check{
-		ID: "recon",
+		ID: checkIDRecon,
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
-			return Result{CheckID: "recon", Resources: resources}, nil
+			return Result{CheckID: checkIDRecon, Resources: resources}, nil
 		},
 	}
 
@@ -132,14 +137,14 @@ func TestEngine_ResourceDiscovery(t *testing.T) {
 	var mu sync.Mutex
 
 	endpoint := Check{
-		ID:          "endpoint",
-		Scope:       ScopePerResource,
-		DependsOn:   []CheckID{"recon"},
+		ID:        checkIDEndpoint,
+		Scope:     ScopePerResource,
+		DependsOn: []CheckID{checkIDRecon},
 		RunResource: func(_ context.Context, _ Target, res Resource, _ ResultStore) (Result, error) {
 			mu.Lock()
 			seenResources = append(seenResources, res.ID)
 			mu.Unlock()
-			return Result{CheckID: "endpoint", ResourceID: res.ID}, nil
+			return Result{CheckID: checkIDEndpoint, ResourceID: res.ID}, nil
 		},
 	}
 
@@ -187,9 +192,9 @@ func TestEngine_ConcurrencyLimits(t *testing.T) {
 	}
 
 	recon := Check{
-		ID: "recon",
+		ID: checkIDRecon,
 		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
-			return Result{CheckID: "recon", Resources: resources}, nil
+			return Result{CheckID: checkIDRecon, Resources: resources}, nil
 		},
 	}
 
@@ -204,7 +209,7 @@ func TestEngine_ConcurrencyLimits(t *testing.T) {
 		checks[i] = Check{
 			ID:          id,
 			Scope:       ScopePerResource,
-			DependsOn:   []CheckID{"recon"},
+			DependsOn:   []CheckID{checkIDRecon},
 			Concurrency: maxResourceConcurrency,
 			RunResource: func(_ context.Context, _ Target, _ Resource, _ ResultStore) (Result, error) {
 				cur := atomic.AddInt32(&levelActive, 1)
@@ -247,7 +252,7 @@ func TestEngine_ConcurrencyLimits(t *testing.T) {
 
 func TestEngine_PanicRecovery(t *testing.T) {
 	rep := &testReporter{}
-	e := New(WithReporter(rep), WithDefaultTimeout(5*time.Second))
+	e := New(WithReporters(rep), WithDefaultTimeout(5*time.Second))
 
 	panicCheck := Check{
 		ID: "panicker",
@@ -298,7 +303,7 @@ func TestEngine_PanicRecovery(t *testing.T) {
 
 func TestEngine_ContextCancellation(t *testing.T) {
 	rep := &testReporter{}
-	e := New(WithReporter(rep), WithDefaultTimeout(5*time.Second))
+	e := New(WithReporters(rep), WithDefaultTimeout(5*time.Second))
 
 	started := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -397,10 +402,10 @@ func TestEngine_WithChecks(t *testing.T) {
 
 func TestEngine_PerResourceSkippedWhenNoResources(t *testing.T) {
 	rep := &testReporter{}
-	e := New(WithReporter(rep), WithDefaultTimeout(5*time.Second))
+	e := New(WithReporters(rep), WithDefaultTimeout(5*time.Second))
 
 	chk := Check{
-		ID:          "endpoint",
+		ID:          checkIDEndpoint,
 		Scope:       ScopePerResource,
 		RunResource: stubRunResource,
 	}

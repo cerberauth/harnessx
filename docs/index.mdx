@@ -1,0 +1,86 @@
+---
+title: harnessx
+description: Concurrent, dependency-aware security check orchestration engine for Go
+template: splash
+hero:
+  tagline: Build complex security scanning workflows. DAG scheduling, parallel execution, structured findings.
+  actions:
+    - text: Get started
+      link: ./getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/cerberauth/harnessx
+      icon: github
+      variant: minimal
+sidebar:
+  order: 1
+---
+
+import { Card, CardGrid, LinkCard } from '@/components/docs'
+
+<CardGrid stagger>
+  <Card title="DAG Scheduling" icon="document">
+    Automatic topological sort. Checks run in parallel waves respecting dependencies.
+  </Card>
+  <Card title="Two Execution Scopes" icon="approve-check">
+    Run once globally or fan out over discovered resources. Mix both in one scan.
+  </Card>
+  <Card title="Zero Dependencies" icon="puzzle">
+    Pure Go standard library. No external runtime dependencies to manage.
+  </Card>
+  <Card title="Bounded Concurrency" icon="rocket">
+    Configurable level-wide and per-resource semaphores. Full context propagation.
+  </Card>
+</CardGrid>
+
+## Quick start
+
+```go
+import "github.com/cerberauth/harnessx"
+
+// Define a check
+check := harnessx.Check{
+  ID:       "check-1",
+  Scope:    harnessx.ScopeGlobal,
+  Run: func(ctx context.Context, _ harnessx.Target) (harnessx.Result, error) {
+    // Your security check logic here
+    return harnessx.Result{Passed: true}, nil
+  },
+}
+
+// Create engine and run
+engine := harnessx.New()
+engine.Register(check)
+summary, err := engine.Run(ctx, target)
+```
+
+## Explore the docs
+
+<CardGrid>
+  <LinkCard
+    title="Installation"
+    description="Add harnessx to your Go project with go get."
+    href="./installation/"
+  />
+  <LinkCard
+    title="Getting Started"
+    description="Write and run your first security checks in 5 minutes."
+    href="./getting-started/"
+  />
+  <LinkCard
+    title="Concepts"
+    description="Understand checks, scopes, conditions, resources, and findings."
+    href="./concepts/"
+  />
+  <LinkCard
+    title="API Reference"
+    description="Complete documentation of harnessx types and methods."
+    href="./reference/api/"
+  />
+  <LinkCard
+    title="Guides"
+    description="Common patterns: dependencies, resources, reporters, timeouts."
+    href="./guides/dependencies/"
+  />
+</CardGrid>

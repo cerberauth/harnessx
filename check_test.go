@@ -43,7 +43,7 @@ func TestSkipWhen_ReturnsEmptyWhenFalse(t *testing.T) {
 
 func TestSkipWhen_ReceivesTargetAndStore(t *testing.T) {
 	target := Target{URL: "http://example.com", Host: "example.com"}
-	store := newStaticStore(Result{CheckID: "dep"})
+	store := newStaticStore(Result{CheckID: testCheckID})
 
 	var gotTarget Target
 	var gotResult Result
@@ -51,7 +51,7 @@ func TestSkipWhen_ReceivesTargetAndStore(t *testing.T) {
 
 	sd := SkipWhen(func(_ context.Context, t Target, s ResultStore) string {
 		gotTarget = t
-		gotResult, gotOk = s.Get("dep")
+		gotResult, gotOk = s.Get(testCheckID)
 		return ""
 	})
 	sd.eval(context.Background(), target, store)
@@ -59,8 +59,8 @@ func TestSkipWhen_ReceivesTargetAndStore(t *testing.T) {
 	if gotTarget.URL != target.URL {
 		t.Errorf("target not passed: want URL %q, got %q", target.URL, gotTarget.URL)
 	}
-	if !gotOk || gotResult.CheckID != "dep" {
-		t.Error("store not passed correctly")
+	if !gotOk || gotResult.CheckID != testCheckID {
+		t.Errorf("store not passed or result missing: gotResult=%+v", gotResult)
 	}
 }
 
