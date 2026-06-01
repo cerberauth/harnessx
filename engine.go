@@ -184,6 +184,9 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
 	}
 
 	summary.TotalChecks = len(checks)
+	for _, r := range reporters {
+		r.OnScanStart(target, summary.TotalChecks)
+	}
 
 	store := newResultStore()
 	levelSem := semaphore.New(cfg.maxConcurrency)

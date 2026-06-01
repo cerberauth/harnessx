@@ -11,10 +11,17 @@ import (
 
 // testReporter records all events.
 type testReporter struct {
-	mu        sync.Mutex
-	starts    []CheckID
-	completes []Result
-	summary   *ScanSummary
+	mu          sync.Mutex
+	totalChecks int
+	starts      []CheckID
+	completes   []Result
+	summary     *ScanSummary
+}
+
+func (r *testReporter) OnScanStart(_ Target, n int) {
+	r.mu.Lock()
+	r.totalChecks = n
+	r.mu.Unlock()
 }
 
 func (r *testReporter) OnCheckStart(c Check, _ Target, _ *Resource) {
