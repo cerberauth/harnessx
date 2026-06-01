@@ -3,6 +3,7 @@ package harnessx
 import "time"
 
 type Reporter interface {
+	OnScanStart(target Target, totalChecks int)
 	OnCheckStart(check Check, target Target, resource *Resource)
 	OnCheckComplete(result Result)
 	OnScanComplete(summary ScanSummary)

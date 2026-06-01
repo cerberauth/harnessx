@@ -12,6 +12,8 @@ import (
 
 type PrettyReporter struct{}
 
+func (r *PrettyReporter) OnScanStart(_ harnessx.Target, _ int) {}
+
 func (r *PrettyReporter) OnCheckStart(check harnessx.Check, target harnessx.Target, resource *harnessx.Resource) {
 	fmt.Printf("🔍 Starting check: %-20s (Scope: %v)\n", check.ID, scopeToString(check.Scope))
 }

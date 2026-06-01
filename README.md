@@ -214,13 +214,14 @@ Implement the `Reporter` interface to receive real-time events:
 
 ```go
 type Reporter interface {
-    OnCheckStart(check Check, target Target)
+    OnScanStart(target Target, totalChecks int)
+    OnCheckStart(check Check, target Target, resource *Resource)
     OnCheckComplete(result Result)
     OnScanComplete(summary ScanSummary)
 }
 ```
 
-`OnScanComplete` is **always** called — even after a context cancellation or early error.
+`OnScanStart` fires before any check runs with the total registered check count — use it to initialise a progress bar. `OnScanComplete` is **always** called — even after a context cancellation or early error.
 
 ```go
 engine := harnessx.New(

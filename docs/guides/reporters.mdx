@@ -17,8 +17,9 @@ Reporters are callbacks that fire during a scan. Use them to:
 
 ```go
 type Reporter interface {
-  OnCheckStart(checkID string)
-  OnCheckComplete(checkID string, result Result)
+  OnScanStart(target Target, totalChecks int)
+  OnCheckStart(check Check, target Target, resource *Resource)
+  OnCheckComplete(result Result)
   OnScanComplete(summary ScanSummary)
 }
 ```
@@ -28,27 +29,31 @@ type Reporter interface {
 ```go
 type SimpleReporter struct{}
 
-func (r *SimpleReporter) OnCheckStart(checkID string) {
-  println("Starting:", checkID)
+func (r *SimpleReporter) OnScanStart(_ harnessx.Target, totalChecks int) {
+  fmt.Printf("Starting scan: %d checks\n", totalChecks)
 }
 
-func (r *SimpleReporter) OnCheckComplete(checkID string, result harnessx.Result) {
+func (r *SimpleReporter) OnCheckStart(check harnessx.Check, _ harnessx.Target, _ *harnessx.Resource) {
+  fmt.Println("Starting:", check.ID)
+}
+
+func (r *SimpleReporter) OnCheckComplete(result harnessx.Result) {
   status := "✓"
-  if !result.Passed {
+  if result.Err != nil {
     status = "✗"
   }
   if result.Skipped {
     status = "○"
   }
-  println(status, checkID)
+  fmt.Println(status, result.CheckID)
 }
 
 func (r *SimpleReporter) OnScanComplete(summary harnessx.ScanSummary) {
-  println("Scan complete.")
-  println("Total:", summary.Total)
-  println("Passed:", summary.Passed)
-  println("Failed:", summary.Failed)
-  println("Skipped:", summary.Skipped)
+  fmt.Println("Scan complete.")
+  fmt.Println("Total:", summary.TotalChecks)
+  fmt.Println("Executed:", summary.Executed)
+  fmt.Println("Failed:", summary.Failed)
+  fmt.Println("Skipped:", summary.Skipped)
 }
 
 engine := harnessx.New(
@@ -60,29 +65,26 @@ engine := harnessx.New(
 
 ```go
 type ResultCollector struct {
-  passed   []string
-  failed   []string
+  passed       []harnessx.CheckID
+  failed       []harnessx.CheckID
   observations []harnessx.Observation
 }
 
-func (r *ResultCollector) OnCheckStart(checkID string) {
-  // No action needed
-}
+func (r *ResultCollector) OnScanStart(_ harnessx.Target, _ int) {}
 
-func (r *ResultCollector) OnCheckComplete(checkID string, result harnessx.Result) {
-  if result.Passed {
-    r.passed = append(r.passed, checkID)
-  } else if !result.Skipped {
-    r.failed = append(r.failed, checkID)
-    if len(result.Observations) > 0 {
-      r.observations = append(r.observations, result.Observations...)
-    }
+func (r *ResultCollector) OnCheckStart(_ harnessx.Check, _ harnessx.Target, _ *harnessx.Resource) {}
+
+func (r *ResultCollector) OnCheckComplete(result harnessx.Result) {
+  if result.Err == nil && !result.Skipped {
+    r.passed = append(r.passed, result.CheckID)
+  } else if result.Err != nil {
+    r.failed = append(r.failed, result.CheckID)
+    r.observations = append(r.observations, result.Observations...)
   }
 }
 
-func (r *ResultCollector) OnScanComplete(summary harnessx.ScanSummary) {
-  // Results are now collected
-}
+func (r *ResultCollector) OnScanComplete(_ harnessx.ScanSummary) {}
+
 
 collector := &ResultCollector{}
 engine := harnessx.New(harnessx.WithReporters(collector))
@@ -100,19 +102,21 @@ type JSONReporter struct {
   checks []map[string]any
 }
 
-func (r *JSONReporter) OnCheckStart(checkID string) {
+func (r *JSONReporter) OnScanStart(_ harnessx.Target, _ int) {}
+
+func (r *JSONReporter) OnCheckStart(check harnessx.Check, _ harnessx.Target, _ *harnessx.Resource) {
   r.checks = append(r.checks, map[string]any{
-    "id":    checkID,
+    "id":    check.ID,
     "start": time.Now(),
   })
 }
 
-func (r *JSONReporter) OnCheckComplete(checkID string, result harnessx.Result) {
+func (r *JSONReporter) OnCheckComplete(result harnessx.Result) {
   for i, check := range r.checks {
-    if check["id"] == checkID {
+    if check["id"] == result.CheckID {
       r.checks[i]["end"] = time.Now()
-      r.checks[i]["passed"] = result.Passed
       r.checks[i]["skipped"] = result.Skipped
+      r.checks[i]["err"] = result.Err
       if len(result.Observations) > 0 {
         r.checks[i]["observations"] = result.Observations
       }
@@ -127,11 +131,13 @@ func (r *JSONReporter) OnScanComplete(summary harnessx.ScanSummary) {
     "checks":  r.checks,
   }
   b, _ := json.MarshalIndent(data, "", "  ")
-  println(string(b))
+  fmt.Println(string(b))
 }
 ```
 
 ## Progress bar reporter
+
+`OnScanStart` fires before any check runs and provides the total check count, making it straightforward to track progress.
 
 ```go
 import "sync"
@@ -142,27 +148,35 @@ type ProgressReporter struct {
   done  int
 }
 
-func NewProgressReporter(total int) *ProgressReporter {
-  return &ProgressReporter{total: total}
+func (r *ProgressReporter) OnScanStart(_ harnessx.Target, totalChecks int) {
+  r.mu.Lock()
+  r.total = totalChecks
+  r.mu.Unlock()
 }
 
-func (r *ProgressReporter) OnCheckStart(checkID string) {}
+func (r *ProgressReporter) OnCheckStart(_ harnessx.Check, _ harnessx.Target, _ *harnessx.Resource) {}
 
-func (r *ProgressReporter) OnCheckComplete(checkID string, result harnessx.Result) {
+func (r *ProgressReporter) OnCheckComplete(result harnessx.Result) {
   r.mu.Lock()
   defer r.mu.Unlock()
   r.done++
-  percent := (r.done * 100) / r.total
-  println(fmt.Sprintf("[%d%%] %d/%d", percent, r.done, r.total))
+  percent := r.done * 100 / r.total
+  if percent > 100 {
+    percent = 100
+  }
+  fmt.Printf("[%d%%] %d/%d\n", percent, r.done, r.total)
 }
 
 func (r *ProgressReporter) OnScanComplete(summary harnessx.ScanSummary) {
-  println("Done!")
+  fmt.Println("Done!")
 }
 
-// Before scanning, count total checks
-engine := harnessx.New(harnessx.WithReporters(NewProgressReporter(12)))
+engine := harnessx.New(harnessx.WithReporters(&ProgressReporter{}))
 ```
+
+:::note
+For `ScopePerResource` checks, `OnCheckComplete` fires once per resource. The `done` counter may exceed `totalChecks` on scans with many resources — clamp to 100% as shown above.
+:::
 
 ## Multiple reporters
 

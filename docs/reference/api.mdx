@@ -152,8 +152,9 @@ Callback interface for tracking scan progress.
 
 ```go
 type Reporter interface {
-  OnCheckStart(checkID string)
-  OnCheckComplete(checkID string, result Result)
+  OnScanStart(target Target, totalChecks int)
+  OnCheckStart(check Check, target Target, resource *Resource)
+  OnCheckComplete(result Result)
   OnScanComplete(summary ScanSummary)
 }
 ```
