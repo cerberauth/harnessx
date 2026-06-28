@@ -1,5 +1,6 @@
 - dependencies
 - resources
+- scenarios
 - conditions
 - reporters
 - timeouts

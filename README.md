@@ -23,6 +23,7 @@
 | Context cancellation | Full `context.Context` propagation with per-check timeouts |
 | Reporter hooks | Real-time `OnCheckStart` / `OnCheckComplete` / `OnScanComplete` callbacks |
 | Structured observations | Checks emit typed observations with title, description, evidence, and free-form metadata |
+| Scenarios | Run named check subsets (REST scan, GraphQL scan) without executing all registered checks |
 | Zero dependencies | Pure Go standard library — no external runtime dependencies |
 
 ---
@@ -208,6 +209,32 @@ deepProbe := harnessx.Check{
 3. Each level receives a **frozen snapshot** of the result store taken before any check in that level starts — intra-level races are impossible by design.
 4. `ScopePerResource` checks within a level fan out over all currently known resources, bounded by `WithMaxResourceConcurrency` (or the check's own `Concurrency` field).
 
+### Scenarios
+
+A `Scenario` groups a named set of checks to be executed together. Use `RunScenario` instead of `Run` to execute only that subset — the engine's registered checks are ignored.
+
+```go
+restScenario := harnessx.Scenario{
+    ID:   "rest-api",
+    Name: "REST API Scan",
+    Checks: []harnessx.Check{discoveryCheck, authCheck, schemaCheck},
+}
+
+summary, err := engine.RunScenario(ctx, target, restScenario)
+```
+
+To share business logic across scenarios while varying the dependency order, define the `Run` function as a variable and reference it in multiple `Check` values with different `DependsOn` fields:
+
+```go
+var checkAuthFn harnessx.CheckFunc = func(...) (harnessx.Result, error) { ... }
+
+// REST: auth after endpoint discovery
+restAuth := harnessx.Check{ID: "rest-auth", DependsOn: []harnessx.CheckID{"rest-discovery"}, Run: checkAuthFn}
+
+// GraphQL: same logic, wired after schema introspection
+gqlAuth  := harnessx.Check{ID: "gql-auth",  DependsOn: []harnessx.CheckID{"gql-introspection"}, Run: checkAuthFn}
+```
+
 ### Reporter
 
 Implement the `Reporter` interface to receive real-time events:
@@ -234,6 +261,7 @@ engine := harnessx.New(
 ## Examples
 
 - [Advanced Scan](./examples/advanced-scan/main.go): A comprehensive example demonstrating multi-level dependencies, resource discovery, custom conditions, and a pretty-printing reporter.
+- [Multi-Scenario Scan](./examples/multi-scenario/main.go): REST API and GraphQL API scenarios sharing business logic with different dependency graphs. Select a scenario at runtime via CLI argument.
 
 ---
 
@@ -251,6 +279,11 @@ func (e *Engine) Register(checks ...Check) error
 // Run executes all registered checks against target.
 // Always calls Reporter.OnScanComplete before returning.
 func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error)
+
+// RunScenario executes only the checks in scenario against target.
+// Ignores checks registered via Register or WithChecks.
+// Always calls Reporter.OnScanComplete before returning.
+func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario) (ScanSummary, error)
 ```
 
 ### Options

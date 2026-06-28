@@ -135,12 +135,28 @@ func (e *Engine) Register(checks ...Check) error {
 }
 
 func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
-	start := time.Now()
-
 	e.mu.RLock()
 	checks := make([]Check, len(e.checks))
 	copy(checks, e.checks)
 	e.mu.RUnlock()
+	return e.run(ctx, target, checks)
+}
+
+// RunScenario executes the checks in scenario against target using the engine's
+// configured reporters, concurrency limits, and default timeout. It does not
+// consult or modify the engine's registered check list — scenario.Checks is
+// fully self-contained.
+//
+// Reporter.OnScanComplete is always called before returning, even if
+// scenario.Checks is empty.
+func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario) (ScanSummary, error) {
+	checks := make([]Check, len(scenario.Checks))
+	copy(checks, scenario.Checks)
+	return e.run(ctx, target, checks)
+}
+
+func (e *Engine) run(ctx context.Context, target Target, checks []Check) (ScanSummary, error) {
+	start := time.Now()
 
 	cfg := e.cfg
 	reporters := cfg.reporters

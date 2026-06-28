@@ -1,0 +1,127 @@
+---
+title: Scenarios
+description: Run named subsets of checks for different API types or contexts
+sidebar:
+  order: 3
+---
+
+A `Scenario` groups a named set of checks into a single runnable unit. Use `RunScenario` when you want to run a focused subset of checks — for instance, a REST API scan vs a GraphQL API scan — without registering them all on one engine and running everything.
+
+## Defining a Scenario
+
+A `Scenario` is a plain value type, like `Check` and `Target`:
+
+```go
+type Scenario struct {
+    ID          string
+    Name        string
+    Description string
+    Tags        []string
+    Checks      []Check
+}
+```
+
+Build one by listing the checks it contains:
+
+```go
+restScenario := harnessx.Scenario{
+    ID:          "rest-api",
+    Name:        "REST API Scan",
+    Description: "Discovers endpoints, verifies auth, validates schema",
+    Tags:        []string{"rest", "openapi"},
+    Checks:      []harnessx.Check{discoveryCheck, authCheck, schemaCheck},
+}
+```
+
+The checks inside a scenario follow the same dependency and concurrency rules as in `Run` — `DependsOn`, `Conditions`, `Scope`, and timeouts all work identically.
+
+## Running a Scenario
+
+Pass a `Scenario` to `Engine.RunScenario`:
+
+```go
+engine := harnessx.New(
+    harnessx.WithMaxConcurrency(4),
+    harnessx.WithReporters(myReporter),
+)
+
+summary, err := engine.RunScenario(context.Background(), target, restScenario)
+```
+
+`RunScenario` uses the engine's configured reporters, concurrency limits, and default timeout, but ignores any checks registered via `Register` or `WithChecks` — `Scenario.Checks` is fully self-contained.
+
+`Reporter.OnScanComplete` is always called before returning, even when `Scenario.Checks` is empty.
+
+## Sharing business logic across scenarios
+
+The same `CheckFunc` can be referenced from multiple scenarios while each scenario wires it at a different point in its dependency graph.
+
+```go
+// Shared function — defined once.
+var checkAuthFn harnessx.CheckFunc = func(ctx context.Context, t harnessx.Target, store harnessx.ResultStore) (harnessx.Result, error) {
+    // verify credentials ...
+    return harnessx.Result{}, nil
+}
+
+// REST: auth runs after endpoint discovery.
+var restAuth = harnessx.Check{
+    ID:        "rest-auth",
+    Scope:     harnessx.ScopeGlobal,
+    DependsOn: []harnessx.CheckID{"rest-discovery"},
+    Run:       checkAuthFn,
+}
+
+// GraphQL: auth runs after schema introspection — different position, same logic.
+var gqlAuth = harnessx.Check{
+    ID:        "gql-auth",
+    Scope:     harnessx.ScopeGlobal,
+    DependsOn: []harnessx.CheckID{"gql-introspection"},
+    Run:       checkAuthFn,
+}
+
+var restScenario = harnessx.Scenario{
+    ID:     "rest-api",
+    Checks: []harnessx.Check{restDiscovery, restAuth, restSchemaCheck},
+}
+
+var gqlScenario = harnessx.Scenario{
+    ID:     "graphql-api",
+    Checks: []harnessx.Check{gqlIntrospection, gqlAuth, gqlDepthCheck},
+}
+```
+
+Both scenarios execute `checkAuthFn` but at different dependency depths. The engine builds a separate DAG for each `RunScenario` call, so the ordering is fully independent.
+
+## Selecting a scenario at runtime
+
+A common pattern is to index scenarios by ID and select one from a CLI flag or environment variable:
+
+```go
+var scenarios = map[string]harnessx.Scenario{
+    "rest-api":    restScenario,
+    "graphql-api": gqlScenario,
+}
+
+func run(ctx context.Context, target harnessx.Target, scenarioID string) error {
+    scenario, ok := scenarios[scenarioID]
+    if !ok {
+        return fmt.Errorf("unknown scenario: %s", scenarioID)
+    }
+    engine := harnessx.New(harnessx.WithReporters(myReporter))
+    _, err := engine.RunScenario(ctx, target, scenario)
+    return err
+}
+```
+
+## Error handling
+
+`RunScenario` returns the same errors as `Run`:
+
+| Error | Cause |
+|---|---|
+| `ErrNoChecks` | `Scenario.Checks` is empty |
+| `ErrDuplicateCheckID` | Two checks in the scenario share the same ID |
+| `ErrUnknownDependency` | A `DependsOn` entry references a check not in the scenario |
+| `ErrCycleDetected` | The dependency graph contains a cycle |
+
+Dependencies must be self-contained within the scenario. A check in scenario A cannot depend on a check that only exists in scenario B.
