@@ -5,6 +5,7 @@ type Resource struct {
 	URL      string
 	Method   string
 	Metadata map[string]string
+	Data     any
 }
 
 type Target struct {
