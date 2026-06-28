@@ -28,3 +28,8 @@ func GetData[T any](store ResultStore, id CheckID) (T, bool) {
 	}
 	return DataAs[T](r)
 }
+
+func ResourceDataAs[T any](resource Resource) (T, bool) {
+	v, ok := resource.Data.(T)
+	return v, ok
+}

@@ -2,6 +2,8 @@ package harnessx
 
 import "testing"
 
+const testHello = "hello"
+
 func TestDataResult_SetsDataOnly(t *testing.T) {
 	r := DataResult(42)
 	if r.CheckID != "" {
@@ -72,13 +74,13 @@ func TestSkip_EmptyReason(t *testing.T) {
 }
 
 func TestDataAs_HitsCorrectType(t *testing.T) {
-	r := ResultData("c", "hello")
+	r := ResultData("c", testHello)
 	v, ok := DataAs[string](r)
 	if !ok {
 		t.Fatal("DataAs should succeed for string")
 	}
-	if v != "hello" {
-		t.Errorf("want %q, got %q", "hello", v)
+	if v != testHello {
+		t.Errorf("want %q, got %q", testHello, v)
 	}
 }
 
@@ -167,5 +169,61 @@ func TestGetData_StructPayload(t *testing.T) {
 	}
 	if v.Status != 404 {
 		t.Errorf("want Status=404, got %d", v.Status)
+	}
+}
+
+func TestResourceDataAs_HitsCorrectType(t *testing.T) {
+	r := Resource{Data: testHello}
+	v, ok := ResourceDataAs[string](r)
+	if !ok {
+		t.Fatal("ResourceDataAs should succeed for string")
+	}
+	if v != testHello {
+		t.Errorf("want %q, got %q", testHello, v)
+	}
+}
+
+func TestResourceDataAs_WrongType(t *testing.T) {
+	r := Resource{Data: 99}
+	_, ok := ResourceDataAs[string](r)
+	if ok {
+		t.Error("ResourceDataAs should fail when type does not match")
+	}
+}
+
+func TestResourceDataAs_NilData(t *testing.T) {
+	r := Resource{}
+	_, ok := ResourceDataAs[string](r)
+	if ok {
+		t.Error("ResourceDataAs should fail when Data is nil")
+	}
+}
+
+func TestResourceDataAs_ZeroValueOnFailure(t *testing.T) {
+	r := Resource{}
+	v, _ := ResourceDataAs[int](r)
+	if v != 0 {
+		t.Errorf("zero value expected, got %d", v)
+	}
+}
+
+func TestResourceDataAs_StructType(t *testing.T) {
+	type meta struct{ Code int }
+	r := Resource{Data: meta{Code: 200}}
+	v, ok := ResourceDataAs[meta](r)
+	if !ok {
+		t.Fatal("ResourceDataAs should succeed for struct type")
+	}
+	if v.Code != 200 {
+		t.Errorf("want Code=200, got %d", v.Code)
+	}
+}
+
+func TestTargetData_FieldRoundTrip(t *testing.T) {
+	type payload struct{ Name string }
+	tgt := Target{Data: payload{Name: "example"}}
+	p, ok := tgt.Data.(payload)
+	if !ok || p.Name != "example" {
+		t.Errorf("Target.Data round-trip failed: %v", tgt.Data)
 	}
 }
