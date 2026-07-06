@@ -19,7 +19,9 @@ func SkipWhen(fn func(ctx context.Context, target Target, store ResultStore) str
 	return SkipDecision{fn: fn}
 }
 
-func (s SkipDecision) eval(ctx context.Context, target Target, store ResultStore) string {
+// Eval runs the skip decision and returns a non-empty skip reason if the
+// check should be skipped, or "" if it should run.
+func (s SkipDecision) Eval(ctx context.Context, target Target, store ResultStore) string {
 	if s.fn == nil {
 		return ""
 	}

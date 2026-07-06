@@ -226,7 +226,7 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check) (ScanSu
 				}
 				defer levelSem.Release()
 
-				if reason := chk.Skip.eval(ctx, target, snapshot); reason != "" {
+				if reason := chk.Skip.Eval(ctx, target, snapshot); reason != "" {
 					skipped := Result{CheckID: chk.ID, Skipped: true, SkipReason: reason}
 					store.set(chk.ID, skipped)
 					for _, r := range reporters {
