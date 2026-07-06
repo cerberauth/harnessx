@@ -4,40 +4,8 @@ import (
 	"testing"
 )
 
-type staticStore struct {
-	results map[CheckID]Result
-}
-
-func newStaticStore(results ...Result) *staticStore {
-	s := &staticStore{results: make(map[CheckID]Result)}
-	for _, r := range results {
-		s.results[r.CheckID] = r
-	}
-	return s
-}
-
-func (s *staticStore) Get(id CheckID) (Result, bool) {
-	r, ok := s.results[id]
-	return r, ok
-}
-
-func (s *staticStore) GetForResource(id CheckID, _ string) (Result, bool) {
-	r, ok := s.results[id]
-	return r, ok
-}
-
-func (s *staticStore) Observations() []Observation {
-	var out []Observation
-	for _, r := range s.results {
-		out = append(out, r.Observations...)
-	}
-	return out
-}
-
-func (s *staticStore) Resources() []Resource { return nil }
-
 func TestIfCheckPassed(t *testing.T) {
-	store := newStaticStore(
+	store := NewStaticResultStore(
 		Result{CheckID: "ok", Observations: nil, Err: nil},
 		Result{CheckID: "withObservations", Observations: []Observation{{Title: "something"}}},
 		Result{CheckID: "skipped", Skipped: true},
@@ -58,7 +26,7 @@ func TestIfCheckPassed(t *testing.T) {
 }
 
 func TestIfCheckObserved(t *testing.T) {
-	store := newStaticStore(
+	store := NewStaticResultStore(
 		Result{
 			CheckID:      "withObs",
 			Observations: []Observation{{Title: "issue found"}},
@@ -81,7 +49,7 @@ func TestIfCheckObserved(t *testing.T) {
 }
 
 func TestIfCheckSkipped(t *testing.T) {
-	store := newStaticStore(
+	store := NewStaticResultStore(
 		Result{CheckID: "skipped", Skipped: true},
 		Result{CheckID: "ran"},
 	)
@@ -98,7 +66,7 @@ func TestIfCheckSkipped(t *testing.T) {
 }
 
 func TestAll(t *testing.T) {
-	store := newStaticStore()
+	store := NewStaticResultStore()
 	alwaysTrue := func(ResultStore) bool { return true }
 	alwaysFalse := func(ResultStore) bool { return false }
 
@@ -114,7 +82,7 @@ func TestAll(t *testing.T) {
 }
 
 func TestAny(t *testing.T) {
-	store := newStaticStore()
+	store := NewStaticResultStore()
 	alwaysTrue := func(ResultStore) bool { return true }
 	alwaysFalse := func(ResultStore) bool { return false }
 
@@ -130,7 +98,7 @@ func TestAny(t *testing.T) {
 }
 
 func TestNot(t *testing.T) {
-	store := newStaticStore()
+	store := NewStaticResultStore()
 	alwaysTrue := func(ResultStore) bool { return true }
 	alwaysFalse := func(ResultStore) bool { return false }
 
