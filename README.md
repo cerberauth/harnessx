@@ -3,7 +3,6 @@
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/cerberauth/harnessx/ci.yml?branch=main&label=core%20build&style=for-the-badge)](https://github.com/cerberauth/harnessx/actions/workflows/ci.yml)
 ![Latest version](https://img.shields.io/github/v/release/cerberauth/harnessx?sort=semver&style=for-the-badge)
 ![Codecov](https://img.shields.io/codecov/c/gh/cerberauth/harnessx?token=BD1WPXJDAW&style=for-the-badge)
-[![Go Report Card](https://goreportcard.com/badge/github.com/cerberauth/harnessx?style=for-the-badge)](https://goreportcard.com/report/github.com/cerberauth/harnessx)
 [![GoDoc reference](https://img.shields.io/badge/godoc-reference-5272B4.svg?style=for-the-badge)](https://godoc.org/github.com/cerberauth/harnessx)
 
 **harnessx** is a concurrent, dependency-aware check orchestration engine for Go. It lets you define a graph of checks with explicit dependencies, run them in parallel waves, and collect structured observations — without writing any scheduling or concurrency boilerplate. Common use cases include security scanning, compliance checks, health checks, and quality gates.
