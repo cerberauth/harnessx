@@ -6,7 +6,8 @@ import (
 )
 
 type SkipDecision struct {
-	fn func(ctx context.Context, target Target, store ResultStore) string
+	fn         func(ctx context.Context, target Target, store ResultStore) string
+	resourceFn func(ctx context.Context, target Target, resource Resource, store ResultStore) string
 }
 
 func SkipAlways(reason string) SkipDecision {
@@ -19,6 +20,14 @@ func SkipWhen(fn func(ctx context.Context, target Target, store ResultStore) str
 	return SkipDecision{fn: fn}
 }
 
+// SkipResourceWhen builds a skip decision evaluated once per resource for a
+// ScopePerResource check, instead of once for the whole check. Use this when
+// the decision depends on the resource itself (e.g. its security scheme)
+// rather than on the target or environment.
+func SkipResourceWhen(fn func(ctx context.Context, target Target, resource Resource, store ResultStore) string) SkipDecision {
+	return SkipDecision{resourceFn: fn}
+}
+
 // Eval runs the skip decision and returns a non-empty skip reason if the
 // check should be skipped, or "" if it should run.
 func (s SkipDecision) Eval(ctx context.Context, target Target, store ResultStore) string {
@@ -26,6 +35,15 @@ func (s SkipDecision) Eval(ctx context.Context, target Target, store ResultStore
 		return ""
 	}
 	return s.fn(ctx, target, store)
+}
+
+// EvalResource runs the per-resource skip decision, falling back to Eval
+// (the check-wide decision) when no resource-specific decision was set.
+func (s SkipDecision) EvalResource(ctx context.Context, target Target, resource Resource, store ResultStore) string {
+	if s.resourceFn != nil {
+		return s.resourceFn(ctx, target, resource, store)
+	}
+	return s.Eval(ctx, target, store)
 }
 
 type CheckID string
