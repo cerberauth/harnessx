@@ -72,6 +72,41 @@ func TestSkipDecision_NilFn(t *testing.T) {
 	}
 }
 
+func TestSkipResourceWhen_ReturnsReasonWhenTrue(t *testing.T) {
+	sd := SkipResourceWhen(func(_ context.Context, _ Target, res Resource, _ ResultStore) string {
+		if res.ID == "r1" {
+			return "not applicable to r1"
+		}
+		return ""
+	})
+
+	got := sd.EvalResource(context.Background(), Target{}, Resource{ID: "r1"}, NewStaticResultStore())
+	if got != "not applicable to r1" {
+		t.Errorf("want %q, got %q", "not applicable to r1", got)
+	}
+
+	got = sd.EvalResource(context.Background(), Target{}, Resource{ID: "r2"}, NewStaticResultStore())
+	if got != "" {
+		t.Errorf("want empty string, got %q", got)
+	}
+}
+
+func TestSkipDecision_EvalResource_FallsBackToEval(t *testing.T) {
+	sd := SkipAlways("check disabled")
+	got := sd.EvalResource(context.Background(), Target{}, Resource{ID: "r1"}, NewStaticResultStore())
+	if got != "check disabled" {
+		t.Errorf("want %q, got %q", "check disabled", got)
+	}
+}
+
+func TestSkipDecision_EvalResource_NilDecision(t *testing.T) {
+	sd := SkipDecision{}
+	got := sd.EvalResource(context.Background(), Target{}, Resource{ID: "r1"}, NewStaticResultStore())
+	if got != "" {
+		t.Errorf("nil decision should return empty string, got %q", got)
+	}
+}
+
 func TestSkipWhen_ContextPassedThrough(t *testing.T) {
 	type key struct{}
 	ctx := context.WithValue(context.Background(), key{}, "marker")

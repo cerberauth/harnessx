@@ -428,3 +428,109 @@ func TestEngine_PerResourceSkippedWhenNoResources(t *testing.T) {
 		t.Errorf("Skipped: want 1, got %d", summary.Skipped)
 	}
 }
+
+// ── Per-resource skip decisions ──────────────────────────────────────────────
+
+func TestEngine_SkipResourceWhen_SkipsOnlyMatchingResources(t *testing.T) {
+	rep := &testReporter{}
+	e := New(WithReporters(rep), WithDefaultTimeout(5*time.Second))
+
+	resources := []Resource{
+		{ID: "r1", Metadata: map[string]string{"skip": "yes"}},
+		{ID: "r2", Metadata: map[string]string{"skip": "no"}},
+	}
+
+	recon := Check{
+		ID: checkIDRecon,
+		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
+			return Result{CheckID: checkIDRecon, Resources: resources}, nil
+		},
+	}
+
+	var ranFor []string
+	var mu sync.Mutex
+
+	endpoint := Check{
+		ID:        checkIDEndpoint,
+		Scope:     ScopePerResource,
+		DependsOn: []CheckID{checkIDRecon},
+		Skip: SkipResourceWhen(func(_ context.Context, _ Target, res Resource, _ ResultStore) string {
+			if res.Metadata["skip"] == "yes" {
+				return "resource opted out"
+			}
+			return ""
+		}),
+		RunResource: func(_ context.Context, _ Target, res Resource, _ ResultStore) (Result, error) {
+			mu.Lock()
+			ranFor = append(ranFor, res.ID)
+			mu.Unlock()
+			return Result{CheckID: checkIDEndpoint, ResourceID: res.ID}, nil
+		},
+	}
+
+	if err := e.Register(recon, endpoint); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	summary, err := e.Run(context.Background(), testTarget)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(ranFor) != 1 || ranFor[0] != "r2" {
+		t.Errorf("RunResource should only run for r2, got %v", ranFor)
+	}
+	if summary.Skipped != 1 {
+		t.Errorf("Skipped: want 1, got %d", summary.Skipped)
+	}
+
+	var gotReason string
+	for _, res := range rep.completes {
+		if res.CheckID == checkIDEndpoint && res.ResourceID == "r1" {
+			gotReason = res.SkipReason
+		}
+	}
+	if gotReason != "resource opted out" {
+		t.Errorf("SkipReason: want %q, got %q", "resource opted out", gotReason)
+	}
+}
+
+func TestEngine_SkipResourceWhen_FallsBackToCheckLevelSkip(t *testing.T) {
+	rep := &testReporter{}
+	e := New(WithReporters(rep), WithDefaultTimeout(5*time.Second))
+
+	resources := []Resource{{ID: "r1"}, {ID: "r2"}}
+
+	recon := Check{
+		ID: checkIDRecon,
+		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
+			return Result{CheckID: checkIDRecon, Resources: resources}, nil
+		},
+	}
+
+	endpoint := Check{
+		ID:          checkIDEndpoint,
+		Scope:       ScopePerResource,
+		DependsOn:   []CheckID{checkIDRecon},
+		Skip:        SkipAlways("globally disabled"),
+		RunResource: stubRunResource,
+	}
+
+	if err := e.Register(recon, endpoint); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	summary, err := e.Run(context.Background(), testTarget)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Check-level skip applies before per-resource dispatch: the whole
+	// check is skipped once, not once per resource.
+	if summary.Skipped != 1 {
+		t.Errorf("Skipped: want 1, got %d", summary.Skipped)
+	}
+	if summary.Executed != 1 { // just recon
+		t.Errorf("Executed: want 1, got %d", summary.Executed)
+	}
+}

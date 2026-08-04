@@ -17,6 +17,7 @@
 | Two execution scopes | `ScopeGlobal` runs once per target; `ScopePerResource` fans out over discovered resources |
 | Resource discovery | Global checks can emit `Resource` objects consumed by downstream per-resource checks |
 | Conditional execution | Skip checks based on prior results using composable `Condition` predicates |
+| Skip decisions | Skip a whole check or individual resources at runtime via `SkipAlways` / `SkipWhen` / `SkipResourceWhen` |
 | Bounded concurrency | Separate semaphores for level-wide and per-resource parallelism |
 | Panic recovery | A panicking check is recorded as failed; the scan continues uninterrupted |
 | Context cancellation | Full `context.Context` propagation with per-check timeouts |
@@ -133,6 +134,9 @@ type Check struct {
     DependsOn  []CheckID
     Conditions []Condition // AND-evaluated; any false → skip
 
+    // Skip control
+    Skip SkipDecision // static/dynamic skip, optionally per-resource
+
     // Execution
     Scope       CheckScope     // ScopeGlobal or ScopePerResource
     Run         CheckFunc      // used when Scope == ScopeGlobal
@@ -198,6 +202,49 @@ deepProbe := harnessx.Check{
         harnessx.IfCheckObserved("detect"),
     },
     Run: ...,
+}
+```
+
+### Skip Decisions
+
+`Skip` gates whether a check (or, for `ScopePerResource` checks, an individual resource) runs at all — evaluated before `Conditions` and before the check function. A non-empty reason skips and records `Result.SkipReason`; reporters still receive `OnCheckComplete` for it.
+
+```go
+type SkipDecision struct { /* built via SkipAlways / SkipWhen / SkipResourceWhen */ }
+
+func SkipAlways(reason string) SkipDecision
+func SkipWhen(fn func(ctx context.Context, target Target, store ResultStore) string) SkipDecision
+func SkipResourceWhen(fn func(ctx context.Context, target Target, resource Resource, store ResultStore) string) SkipDecision
+```
+
+- `SkipAlways` / `SkipWhen` are check-wide: for a `ScopePerResource` check, a non-empty reason skips the **entire check** once, before it fans out over resources.
+- `SkipResourceWhen` is evaluated **once per resource**, so different resources on the same check can be skipped for different reasons (or not at all).
+- If a check's `Skip` has no per-resource decision, per-resource evaluation falls back to the check-wide one.
+
+```go
+// Skip the whole check if the target isn't HTTPS.
+tlsOnly := harnessx.Check{
+    ID:   "hsts-header",
+    Skip: harnessx.SkipWhen(func(ctx context.Context, t harnessx.Target, _ harnessx.ResultStore) string {
+        if !strings.HasPrefix(t.URL, "https://") {
+            return "target is not HTTPS"
+        }
+        return ""
+    }),
+    Run: ...,
+}
+
+// Skip only resources that opted out via metadata.
+endpointAuth := harnessx.Check{
+    ID:    "endpoint-auth",
+    Scope: harnessx.ScopePerResource,
+    Skip: harnessx.SkipResourceWhen(func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) string {
+        if r.Metadata["auth"] == "none" {
+            return "endpoint declares no auth"
+        }
+        return ""
+    }),
+    RunResource: ...,
 }
 ```
 
@@ -283,6 +330,19 @@ func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error)
 // Ignores checks registered via Register or WithChecks.
 // Always calls Reporter.OnScanComplete before returning.
 func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario) (ScanSummary, error)
+```
+
+### Skip Decisions
+
+```go
+// SkipAlways always returns reason — the check (or resource) is always skipped.
+func SkipAlways(reason string) SkipDecision
+
+// SkipWhen evaluates fn once for the whole check.
+func SkipWhen(fn func(ctx context.Context, target Target, store ResultStore) string) SkipDecision
+
+// SkipResourceWhen evaluates fn once per resource, for ScopePerResource checks.
+func SkipResourceWhen(fn func(ctx context.Context, target Target, resource Resource, store ResultStore) string) SkipDecision
 ```
 
 ### Options

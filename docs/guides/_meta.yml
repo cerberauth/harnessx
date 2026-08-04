@@ -2,5 +2,6 @@
 - resources
 - scenarios
 - conditions
+- skip-decisions
 - reporters
 - timeouts

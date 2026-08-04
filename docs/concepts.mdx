@@ -176,6 +176,22 @@ Available conditions:
 - `Any(conds...)` — at least one condition must be true
 - `Not(cond)` — negate a condition
 
+## Skip Decisions
+
+`Skip` gates whether a check (or, for `ScopePerResource` checks, an individual resource) runs, evaluated before `Conditions`:
+
+```go
+func SkipAlways(reason string) SkipDecision
+func SkipWhen(fn func(ctx context.Context, target Target, store ResultStore) string) SkipDecision
+func SkipResourceWhen(fn func(ctx context.Context, target Target, resource Resource, store ResultStore) string) SkipDecision
+```
+
+- `SkipAlways` / `SkipWhen` skip the whole check (all resources at once, for `ScopePerResource`).
+- `SkipResourceWhen` is evaluated once per resource, so different resources can be skipped for different reasons.
+- With no per-resource decision set, per-resource evaluation falls back to the check-wide one.
+
+See the [Skip Decisions guide](/guides/skip-decisions) for examples.
+
 ## Observations
 
 An `Observation` describes an issue or noteworthy outcome found by a check.

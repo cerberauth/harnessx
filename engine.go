@@ -315,6 +315,19 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check) (ScanSu
 						}
 						defer resSem.Release()
 
+						if reason := chk.Skip.EvalResource(ctx, target, res, snapshot); reason != "" {
+							skipped := Result{CheckID: chk.ID, ResourceID: res.ID, Skipped: true, SkipReason: reason}
+							store.setForResource(chk.ID, res.ID, skipped)
+							for _, r := range reporters {
+								r.OnCheckComplete(skipped)
+							}
+							summaryMu.Lock()
+							summary.Skipped++
+							summary.Results = append(summary.Results, skipped)
+							summaryMu.Unlock()
+							return
+						}
+
 						for _, r := range reporters {
 							r.OnCheckStart(chk, target, &res)
 						}

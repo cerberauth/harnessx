@@ -1,0 +1,71 @@
+---
+title: Skip Decisions
+description: Skip a whole check or individual resources at runtime
+sidebar:
+  order: 5
+---
+
+## Overview
+
+`Skip` gates whether a check runs at all, evaluated before `Conditions` and before the check function itself. Unlike `Conditions` (which read prior results), `Skip` decisions can depend on the target, the resource, or any external state you check at runtime.
+
+A non-empty skip reason skips the check (or resource) and records it as `Result.SkipReason`. Reporters still receive `OnCheckComplete` for a skipped check.
+
+## Check-wide skip
+
+### Always skip
+
+```go
+check := harnessx.Check{
+  ID:   "legacy-only-check",
+  Skip: harnessx.SkipAlways("disabled pending rewrite"),
+  Run:  ...,
+}
+```
+
+### Conditional skip
+
+```go
+check := harnessx.Check{
+  ID: "hsts-header",
+  Skip: harnessx.SkipWhen(func(ctx context.Context, target harnessx.Target, store harnessx.ResultStore) string {
+    if !strings.HasPrefix(target.URL, "https://") {
+      return "target is not HTTPS"
+    }
+    return ""
+  }),
+  Run: ...,
+}
+```
+
+For a `ScopePerResource` check, a check-wide `Skip` (`SkipAlways` or `SkipWhen`) skips the **entire check once**, before it fans out over resources — none of the resources run.
+
+## Per-resource skip
+
+Use `SkipResourceWhen` when the decision depends on the resource itself rather than on the target or environment. It's evaluated once per resource, so different resources on the same check can be skipped independently:
+
+```go
+check := harnessx.Check{
+  ID:    "endpoint-auth",
+  Scope: harnessx.ScopePerResource,
+  Skip: harnessx.SkipResourceWhen(func(ctx context.Context, target harnessx.Target, res harnessx.Resource, store harnessx.ResultStore) string {
+    if res.Metadata["auth"] == "none" {
+      return "endpoint declares no auth"
+    }
+    return ""
+  }),
+  RunResource: ...,
+}
+```
+
+If a `Skip` has no per-resource decision set, per-resource evaluation falls back to the check-wide one — so `SkipAlways` and `SkipWhen` still work as expected on `ScopePerResource` checks (skipping every resource at once, in a single skip).
+
+## Skip vs Conditions
+
+Use `Skip` for decisions that don't depend on another check's result — target properties, resource metadata, feature flags, external state. Use [`Conditions`](/guides/conditions) when the decision depends on whether/how a prior check ran.
+
+## Best practices
+
+- Prefer `SkipResourceWhen` over filtering resources upstream — it keeps the skip reason attached to the specific resource in `Result.SkipReason`
+- Keep skip logic side-effect free — it may run once per resource, per level
+- Use `SkipAlways` for checks disabled outright (feature flags, deprecated checks) rather than deleting/re-adding them
