@@ -1,0 +1,124 @@
+---
+title: Baseline Comparison
+description: Detect vulnerabilities by comparing responses against an expected baseline
+sidebar:
+  order: 8
+---
+
+## Overview
+
+A **baseline** is the expected response for a resource — most commonly a status code, e.g. "this endpoint should return `401` without credentials." `NewBaselineCheck` captures a live response, compares it against the baseline, and turns any deviation into `Observation`s.
+
+This is the shape of a real authorization-bypass bug: an endpoint that should reject a request still returns `200`. Comparing against a known-good baseline catches that class of bug directly, instead of relying on a check that hardcodes "expect 401."
+
+```go
+type Snapshot struct {
+  StatusCode int
+  Data       any
+}
+type Baseline = Snapshot
+```
+
+`StatusCode` is what the default comparator looks at. `Data` carries anything else — headers, body, a `probe.Attempt` — for custom comparators.
+
+## Baseline-probe workflow
+
+Capture the baseline at runtime with a dedicated check, then compare against it in a downstream check:
+
+```go
+probeCheck := harnessx.CaptureBaselineCheck("baseline-probe", "Baseline Probe",
+  func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+    resp, err := probe.Do(ctx, client, unauthenticatedRequest(r.URL))
+    if err != nil {
+      return harnessx.Snapshot{}, err
+    }
+    return harnessx.Snapshot{StatusCode: resp.StatusCode, Data: resp}, nil
+  })
+probeCheck.DependsOn = []harnessx.CheckID{"discovery"}
+
+compareCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
+  ID:        "auth-bypass",
+  DependsOn: []harnessx.CheckID{"baseline-probe"},
+  Baseline:  harnessx.BaselineFromCheck("baseline-probe"),
+  Capture: func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+    resp, err := probe.Do(ctx, client, attackerRequest(r.URL))
+    if err != nil {
+      return harnessx.Snapshot{}, err
+    }
+    return harnessx.Snapshot{StatusCode: resp.StatusCode, Data: resp}, nil
+  },
+})
+```
+
+`CaptureBaselineCheck` stores the captured `Snapshot` in `Result.Data` per resource; `BaselineFromCheck` reads it back via `store.GetForResource`.
+
+## Manual baseline
+
+Skip the probe check entirely when you already know the expected response:
+
+```go
+// Same value for every resource.
+harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
+  ID:       "auth-bypass",
+  Baseline: harnessx.StaticBaseline(harnessx.Baseline{StatusCode: http.StatusUnauthorized}),
+  Capture:  captureAttackerRequest,
+})
+
+// Different value per resource, attached at discovery time.
+discovery := harnessx.Check{
+  ID:    "discovery",
+  Scope: harnessx.ScopeGlobal,
+  Run: func(ctx context.Context, t harnessx.Target, _ harnessx.ResultStore) (harnessx.Result, error) {
+    return harnessx.Result{
+      Resources: []harnessx.Resource{
+        {ID: "admin-endpoint", URL: t.URL + "/admin", Data: harnessx.Baseline{StatusCode: http.StatusUnauthorized}},
+      },
+    }, nil
+  },
+}
+
+harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
+  ID:       "auth-bypass",
+  Baseline: harnessx.BaselineFromResource(),
+  Capture:  captureAttackerRequest,
+})
+```
+
+A resource with no resolvable baseline (`BaselineSource` returns `ok=false`) is skipped, with `Result.SkipReason` set to `"no baseline available for resource"`.
+
+## Overriding the comparator
+
+`Compare` defaults to `CompareStatusCode` (flags any status code change). Override it for more specific semantics — e.g. only flag a denied-to-allowed transition, ignoring other differences:
+
+```go
+harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
+  ID:       "auth-bypass",
+  Baseline: harnessx.BaselineFromResource(),
+  Capture:  captureAttackerRequest,
+  Compare: func(baseline, current harnessx.Snapshot) []harnessx.Observation {
+    if baseline.StatusCode >= 400 && current.StatusCode < 300 {
+      return []harnessx.Observation{{Title: "Authorization bypass"}}
+    }
+    return nil
+  },
+})
+```
+
+A comparator can also inspect `Snapshot.Data` for anything beyond the status code — headers, body, timing:
+
+```go
+Compare: func(baseline, current harnessx.Snapshot) []harnessx.Observation {
+  b, ok1 := baseline.Data.(probe.Attempt)
+  c, ok2 := current.Data.(probe.Attempt)
+  if ok1 && ok2 && b.Header.Get("X-Frame-Options") != c.Header.Get("X-Frame-Options") {
+    return []harnessx.Observation{{Title: "Security header changed"}}
+  }
+  return nil
+},
+```
+
+## Best practices
+
+- Prefer the baseline-probe workflow when the expected response can vary by environment or isn't known ahead of time; use a manual baseline when it's a fixed contract (e.g. "unauthenticated requests always get 401").
+- Keep `Capture` side-effect free beyond the HTTP request itself — it may run once per resource, per level.
+- Write comparators that check for a specific, meaningful transition (e.g. denied → allowed) rather than "any difference," to avoid noisy false positives from unrelated response changes.
