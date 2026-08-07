@@ -79,6 +79,61 @@ type Result struct {
 }
 ```
 
+### Snapshot / Baseline
+
+A captured response, reduced to what a comparator needs. `Baseline` is an alias for `Snapshot`, used when it's held up as the expected/reference value.
+
+```go
+type Snapshot struct {
+  StatusCode int
+  Data       any
+}
+type Baseline = Snapshot
+```
+
+### BaselineSource
+
+Resolves the baseline for a resource. `ok=false` means no baseline is available and the comparison check skips.
+
+```go
+type BaselineSource func(ctx context.Context, target Target, resource Resource, store ResultStore) (Baseline, bool)
+
+func StaticBaseline(b Baseline) BaselineSource
+func BaselineFromResource() BaselineSource
+func BaselineFromCheck(id CheckID) BaselineSource
+```
+
+### BaselineComparator
+
+Compares a baseline against a freshly captured snapshot and returns any resulting `Observation`s.
+
+```go
+type BaselineComparator func(baseline, current Snapshot) []Observation
+
+func CompareStatusCode(baseline, current Snapshot) []Observation // default comparator
+```
+
+### BaselineCheckConfig
+
+Configures a baseline-comparison check.
+
+```go
+type BaselineCheckConfig struct {
+  ID          CheckID
+  Name        string
+  Description string
+  DependsOn   []CheckID
+  Baseline    BaselineSource
+  Capture     func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)
+  Compare     BaselineComparator // nil -> CompareStatusCode
+  Timeout     time.Duration
+  Concurrency int
+}
+
+func NewBaselineCheck(cfg BaselineCheckConfig) Check
+func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check
+```
+
 ### Check
 
 A check to execute.

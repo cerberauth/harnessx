@@ -24,6 +24,7 @@
 | Reporter hooks | Real-time `OnCheckStart` / `OnCheckComplete` / `OnScanComplete` callbacks |
 | Structured observations | Checks emit typed observations with title, description, evidence, and free-form metadata |
 | Scenarios | Run named check subsets (REST scan, GraphQL scan) without executing all registered checks |
+| Baseline comparison | Capture an expected response per resource and flag deviations, with pluggable comparison logic |
 | Zero dependencies | Pure Go standard library — no external runtime dependencies |
 
 ---
@@ -302,12 +303,65 @@ engine := harnessx.New(
 )
 ```
 
+### Baseline Comparison
+
+Baseline comparison detects the case where an endpoint's response *changes* in a way that indicates a bug — the canonical example being an endpoint that normally answers `401 Unauthorized` but, because of a broken authorization check, answers `200 OK` instead.
+
+A `Baseline` is just a `Snapshot{StatusCode int, Data any}` — by default only the status code is compared, but `Data` can carry the full response (headers, body, a `probe.Attempt`, ...) for custom comparators to inspect.
+
+```go
+type Snapshot struct {
+    StatusCode int
+    Data       any
+}
+type Baseline = Snapshot
+
+type BaselineSource func(ctx context.Context, target Target, resource Resource, store ResultStore) (Baseline, bool)
+type BaselineComparator func(baseline, current Snapshot) []Observation
+```
+
+A baseline is obtained one of two ways:
+
+- **Baseline probe** — a dedicated check captures the expected response at scan time and stores it via `CaptureBaselineCheck`; downstream checks read it back with `BaselineFromCheck(id)`.
+- **Manual** — a fixed value via `StaticBaseline(b)`, or a per-resource value attached to `Resource.Data` at discovery time and read back with `BaselineFromResource()`.
+
+`NewBaselineCheck` wires a `BaselineSource`, a `Capture` function, and an optional `Compare` (defaults to `CompareStatusCode`) into a normal `Check`:
+
+```go
+// Baseline captured once, at runtime, per resource.
+probeCheck := harnessx.CaptureBaselineCheck("baseline-probe", "Baseline Probe",
+    func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+        return captureUnauthenticated(ctx, r.URL) // your capture logic
+    })
+
+// Compared against a later, potentially malicious, attempt.
+bypassCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
+    ID:        "auth-bypass",
+    DependsOn: []harnessx.CheckID{"baseline-probe"},
+    Baseline:  harnessx.BaselineFromCheck("baseline-probe"),
+    Capture: func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+        return captureWithForgedHeader(ctx, r.URL) // your capture logic
+    },
+    // Compare defaults to CompareStatusCode; override for custom semantics,
+    // e.g. only flag a denied -> allowed transition:
+    Compare: func(baseline, current harnessx.Snapshot) []harnessx.Observation {
+        if baseline.StatusCode >= 400 && current.StatusCode < 300 {
+            return []harnessx.Observation{{Title: "Authorization bypass"}}
+        }
+        return nil
+    },
+})
+```
+
+See the [Baseline Comparison guide](/guides/baseline) and [`examples/baseline-scan`](./examples/baseline-scan/main.go) for a full runnable scenario.
+
 ---
 
 ## Examples
 
 - [Advanced Scan](./examples/advanced-scan/main.go): A comprehensive example demonstrating multi-level dependencies, resource discovery, custom conditions, and a pretty-printing reporter.
 - [Multi-Scenario Scan](./examples/multi-scenario/main.go): REST API and GraphQL API scenarios sharing business logic with different dependency graphs. Select a scenario at runtime via CLI argument.
+- [Baseline Scan](./examples/baseline-scan/main.go): Detects an authorization bypass by comparing live HTTP responses against a per-resource baseline — one captured at runtime, one defined manually.
 
 ---
 
@@ -343,6 +397,43 @@ func SkipWhen(fn func(ctx context.Context, target Target, store ResultStore) str
 
 // SkipResourceWhen evaluates fn once per resource, for ScopePerResource checks.
 func SkipResourceWhen(fn func(ctx context.Context, target Target, resource Resource, store ResultStore) string) SkipDecision
+```
+
+### Baseline Comparison
+
+```go
+type Snapshot struct { StatusCode int; Data any }
+type Baseline = Snapshot
+
+// BaselineSource resolves the baseline for a resource; ok=false skips the check.
+type BaselineSource func(ctx context.Context, target Target, resource Resource, store ResultStore) (Baseline, bool)
+
+func StaticBaseline(b Baseline) BaselineSource
+func BaselineFromResource() BaselineSource
+func BaselineFromCheck(id CheckID) BaselineSource
+
+// BaselineComparator judges the baseline against a freshly captured snapshot.
+type BaselineComparator func(baseline, current Snapshot) []Observation
+
+// CompareStatusCode is the default BaselineComparator.
+func CompareStatusCode(baseline, current Snapshot) []Observation
+
+type BaselineCheckConfig struct {
+    ID, Name, Description string
+    DependsOn             []CheckID
+    Baseline              BaselineSource
+    Capture               func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)
+    Compare               BaselineComparator // nil -> CompareStatusCode
+    Timeout               time.Duration
+    Concurrency           int
+}
+
+// NewBaselineCheck builds a ScopePerResource Check from cfg.
+func NewBaselineCheck(cfg BaselineCheckConfig) Check
+
+// CaptureBaselineCheck builds a ScopePerResource Check that captures a
+// Snapshot per resource and stores it as Result.Data — the "baseline probe".
+func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check
 ```
 
 ### Options

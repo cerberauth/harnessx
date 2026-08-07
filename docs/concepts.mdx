@@ -213,6 +213,29 @@ type Result struct {
 }
 ```
 
+## Baseline Comparison
+
+A `Baseline` (`Snapshot{StatusCode int, Data any}`) captures the expected response for a resource. `NewBaselineCheck` compares it against a freshly captured response and turns any deviation into `Observation`s — the canonical case being an endpoint that normally returns `401` but returns `200` because of a broken authorization check.
+
+```go
+type BaselineSource func(ctx context.Context, target Target, resource Resource, store ResultStore) (Baseline, bool)
+type BaselineComparator func(baseline, current Snapshot) []Observation
+
+func StaticBaseline(b Baseline) BaselineSource
+func BaselineFromResource() BaselineSource
+func BaselineFromCheck(id CheckID) BaselineSource
+func CompareStatusCode(baseline, current Snapshot) []Observation // default comparator
+
+func NewBaselineCheck(cfg BaselineCheckConfig) Check
+func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check
+```
+
+- The baseline comes from a **baseline probe** (`CaptureBaselineCheck` + `BaselineFromCheck`) captured at runtime, or is **defined manually** (`StaticBaseline`, or `BaselineFromResource` reading `Resource.Data` set at discovery time).
+- `Compare` defaults to `CompareStatusCode` but can be overridden with any function to judge headers, body, or other data carried in `Snapshot.Data`.
+- A resource with no resolvable baseline is skipped rather than compared.
+
+See the [Baseline Comparison guide](/guides/baseline) for examples.
+
 ## Execution Model
 
 1. **Topological sort**: Engine sorts checks into dependency levels using Kahn's BFS
