@@ -148,3 +148,99 @@ func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Cont
 		},
 	}
 }
+
+// GlobalBaselineSource is the ScopeGlobal counterpart of BaselineSource: it
+// resolves the Baseline to compare against for a target with no per-resource
+// dimension.
+type GlobalBaselineSource func(ctx context.Context, target Target, store ResultStore) (Baseline, bool)
+
+// GlobalCapture is the ScopeGlobal counterpart of the Capture func used by
+// BaselineCheckConfig: it captures the current Snapshot for a target with no
+// per-resource dimension.
+type GlobalCapture func(ctx context.Context, target Target, store ResultStore) (Snapshot, error)
+
+// StaticGlobalBaseline is the ScopeGlobal counterpart of StaticBaseline.
+func StaticGlobalBaseline(b Baseline) GlobalBaselineSource {
+	return func(_ context.Context, _ Target, _ ResultStore) (Baseline, bool) {
+		return b, true
+	}
+}
+
+// BaselineFromGlobalCheck is the ScopeGlobal counterpart of BaselineFromCheck:
+// it reads the baseline from the global (non-per-resource) result of a prior
+// check (see CaptureGlobalBaselineCheck).
+func BaselineFromGlobalCheck(id CheckID) GlobalBaselineSource {
+	return func(_ context.Context, _ Target, store ResultStore) (Baseline, bool) {
+		return GetData[Baseline](store, id)
+	}
+}
+
+// GlobalBaselineCheckConfig is the ScopeGlobal counterpart of
+// BaselineCheckConfig.
+type GlobalBaselineCheckConfig struct {
+	ID          CheckID
+	Name        string
+	Description string
+	DependsOn   []CheckID
+
+	Baseline GlobalBaselineSource
+
+	Capture GlobalCapture
+
+	Compare BaselineComparator
+
+	Timeout time.Duration
+}
+
+// NewGlobalBaselineCheck is the ScopeGlobal counterpart of NewBaselineCheck,
+// for targets with no per-resource dimension (see BaselineCheckConfig for the
+// ScopePerResource variant).
+func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check {
+	compare := cfg.Compare
+	if compare == nil {
+		compare = CompareStatusCode
+	}
+
+	return Check{
+		ID:          cfg.ID,
+		Name:        cfg.Name,
+		Description: cfg.Description,
+		DependsOn:   cfg.DependsOn,
+		Scope:       ScopeGlobal,
+		Timeout:     cfg.Timeout,
+		Run: func(ctx context.Context, target Target, store ResultStore) (Result, error) {
+			baseline, ok := cfg.Baseline(ctx, target, store)
+			if !ok {
+				return Result{Skipped: true, SkipReason: "no baseline available for target"}, nil
+			}
+
+			current, err := cfg.Capture(ctx, target, store)
+			if err != nil {
+				return Result{}, err
+			}
+
+			obs := compare(baseline, current)
+			for i := range obs {
+				obs[i].CheckID = cfg.ID
+			}
+			return Result{Observations: obs}, nil
+		},
+	}
+}
+
+// CaptureGlobalBaselineCheck is the ScopeGlobal counterpart of
+// CaptureBaselineCheck, for targets with no per-resource dimension.
+func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check {
+	return Check{
+		ID:    id,
+		Name:  name,
+		Scope: ScopeGlobal,
+		Run: func(ctx context.Context, target Target, store ResultStore) (Result, error) {
+			snap, err := capture(ctx, target, store)
+			if err != nil {
+				return Result{}, err
+			}
+			return Result{Data: snap}, nil
+		},
+	}
+}

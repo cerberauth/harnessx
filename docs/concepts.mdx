@@ -228,11 +228,18 @@ func CompareStatusCode(baseline, current Snapshot) []Observation // default comp
 
 func NewBaselineCheck(cfg BaselineCheckConfig) Check
 func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check
+
+// ScopeGlobal counterparts, for targets with no per-resource dimension.
+func StaticGlobalBaseline(b Baseline) GlobalBaselineSource
+func BaselineFromGlobalCheck(id CheckID) GlobalBaselineSource
+func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check
+func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check
 ```
 
 - The baseline comes from a **baseline probe** (`CaptureBaselineCheck` + `BaselineFromCheck`) captured at runtime, or is **defined manually** (`StaticBaseline`, or `BaselineFromResource` reading `Resource.Data` set at discovery time).
 - `Compare` defaults to `CompareStatusCode` but can be overridden with any function to judge headers, body, or other data carried in `Snapshot.Data`.
 - A resource with no resolvable baseline is skipped rather than compared.
+- For `ScopeGlobal` checks (no per-resource dimension), use `NewGlobalBaselineCheck`/`CaptureGlobalBaselineCheck` — same API, minus the `Resource` param.
 
 See the [Baseline Comparison guide](/guides/baseline) for examples.
 
