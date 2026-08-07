@@ -117,6 +117,36 @@ Compare: func(baseline, current harnessx.Snapshot) []harnessx.Observation {
 },
 ```
 
+## Global baseline (ScopeGlobal)
+
+For targets with no per-resource dimension — a single token, a single endpoint under test — use the `ScopeGlobal` counterparts: `GlobalBaselineSource`, `GlobalCapture`, `StaticGlobalBaseline`, `BaselineFromGlobalCheck`, `NewGlobalBaselineCheck`, `CaptureGlobalBaselineCheck`. Same shape as the `ScopePerResource` API, minus the `Resource` param:
+
+```go
+probeCheck := harnessx.CaptureGlobalBaselineCheck("baseline-probe", "Baseline Probe",
+  func(ctx context.Context, t harnessx.Target, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+    resp, err := probe.Do(ctx, client, unauthenticatedRequest(t.URL))
+    if err != nil {
+      return harnessx.Snapshot{}, err
+    }
+    return harnessx.Snapshot{StatusCode: resp.StatusCode, Data: resp}, nil
+  })
+
+compareCheck := harnessx.NewGlobalBaselineCheck(harnessx.GlobalBaselineCheckConfig{
+  ID:        "auth-bypass",
+  DependsOn: []harnessx.CheckID{"baseline-probe"},
+  Baseline:  harnessx.BaselineFromGlobalCheck("baseline-probe"),
+  Capture: func(ctx context.Context, t harnessx.Target, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+    resp, err := probe.Do(ctx, client, attackerRequest(t.URL))
+    if err != nil {
+      return harnessx.Snapshot{}, err
+    }
+    return harnessx.Snapshot{StatusCode: resp.StatusCode, Data: resp}, nil
+  },
+})
+```
+
+`CaptureGlobalBaselineCheck` stores the captured `Snapshot` in `Result.Data` via `store.Get` (not per-resource); `BaselineFromGlobalCheck` reads it back the same way. `StaticGlobalBaseline` mirrors `StaticBaseline` for a fixed expected value. A target with no resolvable baseline is skipped, with `Result.SkipReason` set to `"no baseline available for target"`.
+
 ## Best practices
 
 - Prefer the baseline-probe workflow when the expected response can vary by environment or isn't known ahead of time; use a manual baseline when it's a fixed contract (e.g. "unauthenticated requests always get 401").

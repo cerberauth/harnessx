@@ -134,6 +134,38 @@ func NewBaselineCheck(cfg BaselineCheckConfig) Check
 func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check
 ```
 
+### GlobalBaselineSource / GlobalCapture
+
+`ScopeGlobal` counterparts of `BaselineSource` and the `Capture` func — no `Resource` param, for targets with no per-resource dimension.
+
+```go
+type GlobalBaselineSource func(ctx context.Context, target Target, store ResultStore) (Baseline, bool)
+type GlobalCapture func(ctx context.Context, target Target, store ResultStore) (Snapshot, error)
+
+func StaticGlobalBaseline(b Baseline) GlobalBaselineSource
+func BaselineFromGlobalCheck(id CheckID) GlobalBaselineSource
+```
+
+### GlobalBaselineCheckConfig
+
+`ScopeGlobal` counterpart of `BaselineCheckConfig`.
+
+```go
+type GlobalBaselineCheckConfig struct {
+  ID          CheckID
+  Name        string
+  Description string
+  DependsOn   []CheckID
+  Baseline    GlobalBaselineSource
+  Capture     GlobalCapture
+  Compare     BaselineComparator // nil -> CompareStatusCode
+  Timeout     time.Duration
+}
+
+func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check
+func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check
+```
+
 ### Check
 
 A check to execute.
