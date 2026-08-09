@@ -26,6 +26,23 @@ type Check struct {
 }
 ```
 
+## Check Definitions
+
+For a reusable check package, hand-assembling a `Check`'s `ID`, `Name`, `Description`, `Link`, `Tags`, and `DependsOn` in Go gets repetitive. The `checkdef` subpackage (`github.com/cerberauth/harnessx/checkdef`) parses that metadata from an embedded YAML, TOML, or JSON file:
+
+```go
+import "github.com/cerberauth/harnessx/checkdef"
+
+//go:embed check.yaml
+var checkYAML []byte
+
+var def = checkdef.MustParseCheckDefYAML("algnone", checkYAML)
+```
+
+`MustParseCheckDefYAML` / `MustParseCheckDefTOML` / `MustParseCheckDefJSON` each panic (prefixed with the given `pkg` name) on malformed input, since definitions are normally parsed once at `init()` time — a bad definition file is a build-time bug, not a runtime error. `CheckDef.DependsOnIDs()` converts `DependsOn` (`[]string`) to `[]harnessx.CheckID` for `Check.DependsOn`.
+
+`checkdef` is a separate package so the root `harnessx` package keeps zero third-party dependencies; only code that imports `checkdef` pulls in a YAML/TOML parser.
+
 ## Execution Scopes
 
 <CardGrid>

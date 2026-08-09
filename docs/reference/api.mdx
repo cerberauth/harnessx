@@ -238,6 +238,29 @@ type Check struct {
 - `Run`: Function to run for global checks (required if `Scope == ScopeGlobal`)
 - `RunResource`: Function to run for per-resource checks (required if `Scope == ScopePerResource`)
 
+### CheckDef
+
+`checkdef` package (`github.com/cerberauth/harnessx/checkdef`). Declarative metadata for a `Check` — everything except behavior — parsed from an embedded YAML, TOML, or JSON definition file instead of hand-assembled in Go. Kept out of the root package so the core engine has no third-party dependencies; only importers of `checkdef` pull in a YAML/TOML parser.
+
+```go
+type CheckDef struct {
+  ID          string
+  Name        string
+  Description string
+  Link        string
+  Tags        []string
+  DependsOn   []string
+}
+
+func (d CheckDef) DependsOnIDs() []harnessx.CheckID
+
+func MustParseCheckDefYAML(pkg string, data []byte) CheckDef
+func MustParseCheckDefTOML(pkg string, data []byte) CheckDef
+func MustParseCheckDefJSON(pkg string, data []byte) CheckDef
+```
+
+Each `MustParse*` panics, prefixed with `pkg`, on malformed input — definitions are typically parsed once at `init()` time from an `//go:embed`ded file, so a bad definition is a build-time bug rather than something to recover from at runtime.
+
 ### Condition
 
 A predicate that determines if a check should run.
