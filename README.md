@@ -25,7 +25,7 @@
 | Structured observations | Checks emit typed observations with title, description, evidence, and free-form metadata |
 | Scenarios | Run named check subsets (REST scan, GraphQL scan) without executing all registered checks |
 | Baseline comparison | Capture an expected response per resource and flag deviations, with pluggable comparison logic |
-| Zero dependencies | Pure Go standard library — no external runtime dependencies |
+| Zero dependencies | Core engine (root package) is pure Go standard library; optional subpackages (`reporters`, `checkdef`) pull in their own deps only when imported |
 
 ---
 
@@ -147,6 +147,53 @@ type Check struct {
     Concurrency int            // per-resource parallelism; 0 → engine default
 }
 ```
+
+### Check Definitions
+
+Hand-assembling `ID`, `Name`, `Description`, `Link`, `Tags`, and `DependsOn` in Go gets repetitive for a reusable check package. The `checkdef` subpackage parses that metadata from an embedded YAML, TOML, or JSON file instead:
+
+```go
+import "github.com/cerberauth/harnessx/checkdef"
+
+type CheckDef = checkdef.CheckDef // ID, Name, Description, Link, Tags, DependsOn
+
+func MustParseCheckDefYAML(pkg string, data []byte) CheckDef
+func MustParseCheckDefTOML(pkg string, data []byte) CheckDef
+func MustParseCheckDefJSON(pkg string, data []byte) CheckDef
+```
+
+Each `MustParse*` panics (prefixed with `pkg`) on malformed input — definitions are typically parsed once at `init()` time from an `//go:embed`ded file, so a bad definition is a build-time bug, not a runtime error to recover from.
+
+```yaml
+# check.yaml
+id: alg_none
+name: "Algorithm None"
+description: "Tests if the server accepts tokens with the algorithm set to 'none'."
+link: "https://example.com/vulnerabilities/jwt-alg-none"
+tags:
+  - algorithm
+depends_on:
+  - baseline
+```
+
+```go
+//go:embed check.yaml
+var checkYAML []byte
+
+var def = checkdef.MustParseCheckDefYAML("algnone", checkYAML)
+
+var Check = harnessx.Check{
+    ID:          harnessx.CheckID(def.ID),
+    Name:        def.Name,
+    Description: def.Description,
+    Link:        def.Link,
+    Tags:        def.Tags,
+    DependsOn:   def.DependsOnIDs(),
+    Run:         run,
+}
+```
+
+`checkdef` is a separate package from root `harnessx` so the core engine keeps its zero-dependency guarantee — the YAML/TOML parsers are only pulled in by code that imports `checkdef`.
 
 ### Scopes
 
