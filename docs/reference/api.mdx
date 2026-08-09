@@ -86,6 +86,9 @@ A captured response, reduced to what a comparator needs. `Baseline` is an alias 
 ```go
 type Snapshot struct {
   StatusCode int
+  Header     http.Header
+  Body       []byte
+  Duration   time.Duration
   Data       any
 }
 type Baseline = Snapshot
@@ -165,6 +168,50 @@ type GlobalBaselineCheckConfig struct {
 func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check
 func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check
 ```
+
+### Request building
+
+`probe` package. `NewRequest` is the single entry point for building an outgoing HTTP request; small named `RequestMutator` functions compose onto it to shape headers, cookies, query params, or credentials.
+
+```go
+type RequestMutator func(*http.Request) error
+type RequestBuilder func(ctx context.Context) (*http.Request, error)
+
+func NewRequest(ctx context.Context, method, target string, body io.Reader, mutators ...RequestMutator) (*http.Request, error)
+
+func WithHeader(name, value string) RequestMutator
+func WithCookie(cookie *http.Cookie) RequestMutator
+func WithQuery(name, value string) RequestMutator
+```
+
+`NewRequestFromResource` (root `harnessx` package) is a convenience over `NewRequest` for a `Resource`, defaulting to `GET` when `Resource.Method` is empty:
+
+```go
+func NewRequestFromResource(ctx context.Context, r Resource, mutators ...probe.RequestMutator) (*http.Request, error)
+```
+
+### Credential mutators
+
+`probe` package. One thin `RequestMutator` per real-world auth use case — place an arbitrary secret/credential (a token, API key, session ID, basic-auth pair, ...) on an outgoing request.
+
+```go
+func WithBearerToken(token string) RequestMutator                // Authorization: Bearer <token>
+func WithBasicAuth(username, password string) RequestMutator     // Authorization: Basic <base64>
+func WithAPIKeyHeader(name, value string) RequestMutator          // arbitrary header, e.g. X-API-Key
+func WithAPIKeyQuery(name, value string) RequestMutator           // arbitrary query param
+func WithAuthCookie(name, value string) RequestMutator            // cookie, Secure+HttpOnly+SameSite=Strict
+func WithFormCredential(name, value string) RequestMutator        // urlencoded form body field, switches method to POST
+```
+
+### ProbeAndCompareBaseline
+
+Sends the request returned by a `probe.RequestBuilder` via `probe.Do`, and diffs the result against the baseline stored under `baselineID` using `CompareStatusCode`. Useful for one-off probes (credential swaps, header/param tampering, auth-bypass checks) that don't need the full `NewBaselineCheck` wiring.
+
+```go
+func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error)
+```
+
+Returns the captured `Snapshot` (with the full response header/body/duration) and whether it deviated from the baseline. Building a `Result`/`Observation` from that is left to the caller.
 
 ### Check
 

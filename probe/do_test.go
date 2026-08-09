@@ -19,21 +19,21 @@ func TestDo_CapturesStatusHeaderBody(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
-	a, err := Do(context.Background(), http.DefaultClient, req)
+	statusCode, header, body, duration, err := Do(context.Background(), http.DefaultClient, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if a.StatusCode != http.StatusTeapot {
-		t.Errorf("StatusCode = %d, want %d", a.StatusCode, http.StatusTeapot)
+	if statusCode != http.StatusTeapot {
+		t.Errorf("statusCode = %d, want %d", statusCode, http.StatusTeapot)
 	}
-	if a.Header.Get("X-Test") != "value" {
-		t.Errorf("Header[X-Test] = %q, want %q", a.Header.Get("X-Test"), "value")
+	if header.Get("X-Test") != "value" {
+		t.Errorf("header[X-Test] = %q, want %q", header.Get("X-Test"), "value")
 	}
-	if string(a.Body) != "hello world" {
-		t.Errorf("Body = %q, want %q", a.Body, "hello world")
+	if string(body) != "hello world" {
+		t.Errorf("body = %q, want %q", body, "hello world")
 	}
-	if a.Duration <= 0 {
-		t.Error("Duration should be positive")
+	if duration <= 0 {
+		t.Error("duration should be positive")
 	}
 }
 
@@ -49,7 +49,7 @@ func TestDo_RequestBodyReplayable(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(wantBody))
-	_, err := Do(context.Background(), http.DefaultClient, req)
+	_, _, _, _, err := Do(context.Background(), http.DefaultClient, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestDo_RequestBodyReplayable(t *testing.T) {
 
 func TestDo_TransportError(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:0", nil)
-	_, err := Do(context.Background(), http.DefaultClient, req)
+	_, _, _, _, err := Do(context.Background(), http.DefaultClient, req)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -77,7 +77,7 @@ func TestDo_ContextCancelled(t *testing.T) {
 	cancel()
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
-	_, err := Do(ctx, http.DefaultClient, req)
+	_, _, _, _, err := Do(ctx, http.DefaultClient, req)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
@@ -90,11 +90,11 @@ func TestDo_EmptyBody(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
-	a, err := Do(context.Background(), http.DefaultClient, req)
+	_, _, body, _, err := Do(context.Background(), http.DefaultClient, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(a.Body) != 0 {
-		t.Errorf("Body = %q, want empty", a.Body)
+	if len(body) != 0 {
+		t.Errorf("body = %q, want empty", body)
 	}
 }

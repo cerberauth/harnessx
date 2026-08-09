@@ -14,12 +14,15 @@ This is the shape of a real authorization-bypass bug: an endpoint that should re
 ```go
 type Snapshot struct {
   StatusCode int
+  Header     http.Header
+  Body       []byte
+  Duration   time.Duration
   Data       any
 }
 type Baseline = Snapshot
 ```
 
-`StatusCode` is what the default comparator looks at. `Data` carries anything else — headers, body, a `probe.Attempt` — for custom comparators.
+`StatusCode` is what the default comparator looks at. `Header`, `Body`, and `Duration` carry the full response; `Data` carries anything else custom comparators need.
 
 ## Baseline-probe workflow
 
@@ -28,11 +31,11 @@ Capture the baseline at runtime with a dedicated check, then compare against it 
 ```go
 probeCheck := harnessx.CaptureBaselineCheck("baseline-probe", "Baseline Probe",
   func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-    resp, err := probe.Do(ctx, client, unauthenticatedRequest(r.URL))
+    statusCode, header, body, duration, err := probe.Do(ctx, client, unauthenticatedRequest(r.URL))
     if err != nil {
       return harnessx.Snapshot{}, err
     }
-    return harnessx.Snapshot{StatusCode: resp.StatusCode, Data: resp}, nil
+    return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
   })
 probeCheck.DependsOn = []harnessx.CheckID{"discovery"}
 
@@ -41,11 +44,11 @@ compareCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
   DependsOn: []harnessx.CheckID{"baseline-probe"},
   Baseline:  harnessx.BaselineFromCheck("baseline-probe"),
   Capture: func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-    resp, err := probe.Do(ctx, client, attackerRequest(r.URL))
+    statusCode, header, body, duration, err := probe.Do(ctx, client, attackerRequest(r.URL))
     if err != nil {
       return harnessx.Snapshot{}, err
     }
-    return harnessx.Snapshot{StatusCode: resp.StatusCode, Data: resp}, nil
+    return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
   },
 })
 ```
@@ -104,18 +107,43 @@ harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
 })
 ```
 
-A comparator can also inspect `Snapshot.Data` for anything beyond the status code — headers, body, timing:
+A comparator can also inspect `Snapshot.Header`/`Body`/`Duration` for anything beyond the status code:
 
 ```go
 Compare: func(baseline, current harnessx.Snapshot) []harnessx.Observation {
-  b, ok1 := baseline.Data.(probe.Attempt)
-  c, ok2 := current.Data.(probe.Attempt)
-  if ok1 && ok2 && b.Header.Get("X-Frame-Options") != c.Header.Get("X-Frame-Options") {
+  if baseline.Header.Get("X-Frame-Options") != current.Header.Get("X-Frame-Options") {
     return []harnessx.Observation{{Title: "Security header changed"}}
   }
   return nil
 },
 ```
+
+## Credential-placement probing
+
+Some checks probe by swapping or omitting a credential — a token, API key, session ID — and comparing the response against a baseline. `harnessx.ProbeAndCompareBaseline` takes a `probe.RequestBuilder` closure, so a request built via `probe.NewRequest` plus a named credential mutator (`WithBearerToken`, `WithBasicAuth`, `WithAPIKeyHeader`, `WithAPIKeyQuery`, `WithAuthCookie`, `WithFormCredential`) collapses the request-build-and-compare pattern into one call, without needing a `Capture`/`Compare` pair wired through `NewBaselineCheck`:
+
+```go
+check := harnessx.Check{
+  ID:        "forged-token-probe",
+  DependsOn: []harnessx.CheckID{"baseline-probe"},
+  Scope:     harnessx.ScopePerResource,
+  RunResource: func(ctx context.Context, t harnessx.Target, r harnessx.Resource, store harnessx.ResultStore) (harnessx.Result, error) {
+    _, vulnerable, err := harnessx.ProbeAndCompareBaseline(ctx, p,
+      func(ctx context.Context) (*http.Request, error) {
+        return probe.NewRequest(ctx, http.MethodGet, r.URL, nil, probe.WithBearerToken(forgedToken))
+      }, store, "baseline-probe")
+    if err != nil {
+      return harnessx.Result{}, err
+    }
+    if vulnerable {
+      return harnessx.Result{Observations: []harnessx.Observation{{Title: "Authorization bypass"}}}, nil
+    }
+    return harnessx.Result{}, nil
+  },
+}
+```
+
+`probe.NewRequest(ctx, method, target, body, mutators...)` is the request builder underneath, if you need to send the request yourself instead of going through `ProbeAndCompareBaseline`. Swap `WithBearerToken` for `WithBasicAuth(username, password)`, `WithAPIKeyHeader(name, value)`, `WithAPIKeyQuery(name, value)`, `WithAuthCookie(name, value)`, or `WithFormCredential(name, value)` depending on where the credential under test lives — each is a thin `probe.RequestMutator` you can also compose with `WithHeader`/`WithQuery`/`WithCookie` for anything the credential mutators don't already cover.
 
 ## Global baseline (ScopeGlobal)
 
@@ -124,11 +152,11 @@ For targets with no per-resource dimension — a single token, a single endpoint
 ```go
 probeCheck := harnessx.CaptureGlobalBaselineCheck("baseline-probe", "Baseline Probe",
   func(ctx context.Context, t harnessx.Target, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-    resp, err := probe.Do(ctx, client, unauthenticatedRequest(t.URL))
+    statusCode, header, body, duration, err := probe.Do(ctx, client, unauthenticatedRequest(t.URL))
     if err != nil {
       return harnessx.Snapshot{}, err
     }
-    return harnessx.Snapshot{StatusCode: resp.StatusCode, Data: resp}, nil
+    return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
   })
 
 compareCheck := harnessx.NewGlobalBaselineCheck(harnessx.GlobalBaselineCheckConfig{
@@ -136,11 +164,11 @@ compareCheck := harnessx.NewGlobalBaselineCheck(harnessx.GlobalBaselineCheckConf
   DependsOn: []harnessx.CheckID{"baseline-probe"},
   Baseline:  harnessx.BaselineFromGlobalCheck("baseline-probe"),
   Capture: func(ctx context.Context, t harnessx.Target, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-    resp, err := probe.Do(ctx, client, attackerRequest(t.URL))
+    statusCode, header, body, duration, err := probe.Do(ctx, client, attackerRequest(t.URL))
     if err != nil {
       return harnessx.Snapshot{}, err
     }
-    return harnessx.Snapshot{StatusCode: resp.StatusCode, Data: resp}, nil
+    return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
   },
 })
 ```
