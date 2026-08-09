@@ -176,21 +176,32 @@ depends_on:
   - baseline
 ```
 
+`NewCheck` / `NewResourceCheck` turn a `CheckDef` plus a run function into a `harnessx.Check`, so a check only supplies what makes it different — the metadata fields are wired for you:
+
+```go
+func NewCheck(def CheckDef, run harnessx.CheckFunc, opts ...Option) harnessx.Check         // Scope: ScopeGlobal
+func NewResourceCheck(def CheckDef, run harnessx.ResourceCheckFunc, opts ...Option) harnessx.Check // Scope: ScopePerResource
+
+func WithSkip(s harnessx.SkipDecision) Option
+func WithConditions(c ...harnessx.Condition) Option
+func WithTimeout(d time.Duration) Option
+func WithConcurrency(n int) Option // NewResourceCheck only
+```
+
 ```go
 //go:embed check.yaml
 var checkYAML []byte
 
 var def = checkdef.MustParseCheckDefYAML("algnone", checkYAML)
 
-var Check = harnessx.Check{
-    ID:          harnessx.CheckID(def.ID),
-    Name:        def.Name,
-    Description: def.Description,
-    Link:        def.Link,
-    Tags:        def.Tags,
-    DependsOn:   def.DependsOnIDs(),
-    Run:         run,
-}
+var Check = checkdef.NewCheck(def, run,
+    checkdef.WithSkip(harnessx.SkipWhen(func(ctx context.Context, t harnessx.Target, _ harnessx.ResultStore) string {
+        if offline {
+            return "requires live server"
+        }
+        return ""
+    })),
+)
 ```
 
 `checkdef` is a separate package from root `harnessx` so the core engine keeps its zero-dependency guarantee — the YAML/TOML parsers are only pulled in by code that imports `checkdef`.
