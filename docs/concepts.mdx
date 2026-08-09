@@ -37,9 +37,20 @@ import "github.com/cerberauth/harnessx/checkdef"
 var checkYAML []byte
 
 var def = checkdef.MustParseCheckDefYAML("algnone", checkYAML)
+
+var Check = checkdef.NewCheck(def, run) // Scope: ScopeGlobal, ID/Name/.../DependsOn wired from def
 ```
 
-`MustParseCheckDefYAML` / `MustParseCheckDefTOML` / `MustParseCheckDefJSON` each panic (prefixed with the given `pkg` name) on malformed input, since definitions are normally parsed once at `init()` time — a bad definition file is a build-time bug, not a runtime error. `CheckDef.DependsOnIDs()` converts `DependsOn` (`[]string`) to `[]harnessx.CheckID` for `Check.DependsOn`.
+`MustParseCheckDefYAML` / `MustParseCheckDefTOML` / `MustParseCheckDefJSON` each panic (prefixed with the given `pkg` name) on malformed input, since definitions are normally parsed once at `init()` time — a bad definition file is a build-time bug, not a runtime error.
+
+`NewCheck` (`ScopeGlobal`) and `NewResourceCheck` (`ScopePerResource`) turn a `CheckDef` plus a run function into a `harnessx.Check` without hand-copying every metadata field. `WithSkip`, `WithConditions`, `WithTimeout`, and `WithConcurrency` set the remaining optional `Check` fields via functional options:
+
+```go
+var Check = checkdef.NewCheck(def, run,
+    checkdef.WithSkip(harnessx.SkipWhen(isOffline)),
+    checkdef.WithTimeout(10*time.Second),
+)
+```
 
 `checkdef` is a separate package so the root `harnessx` package keeps zero third-party dependencies; only code that imports `checkdef` pulls in a YAML/TOML parser.
 

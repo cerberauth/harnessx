@@ -261,6 +261,24 @@ func MustParseCheckDefJSON(pkg string, data []byte) CheckDef
 
 Each `MustParse*` panics, prefixed with `pkg`, on malformed input — definitions are typically parsed once at `init()` time from an `//go:embed`ded file, so a bad definition is a build-time bug rather than something to recover from at runtime.
 
+### NewCheck / NewResourceCheck
+
+`checkdef` package. Build a `harnessx.Check` from a `CheckDef` plus a run function, wiring `ID`/`Name`/`Description`/`Link`/`Tags`/`DependsOn` for you. `NewCheck` sets `Scope: ScopeGlobal`; `NewResourceCheck` sets `Scope: ScopePerResource`.
+
+```go
+func NewCheck(def CheckDef, run harnessx.CheckFunc, opts ...Option) harnessx.Check
+func NewResourceCheck(def CheckDef, run harnessx.ResourceCheckFunc, opts ...Option) harnessx.Check
+```
+
+**Options** (everything on `harnessx.Check` not already carried by `CheckDef` or the run function):
+
+```go
+func WithSkip(s harnessx.SkipDecision) Option
+func WithConditions(c ...harnessx.Condition) Option
+func WithTimeout(d time.Duration) Option
+func WithConcurrency(n int) Option // meaningful on NewResourceCheck only
+```
+
 ### Condition
 
 A predicate that determines if a check should run.
