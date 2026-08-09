@@ -155,7 +155,7 @@ Hand-assembling `ID`, `Name`, `Description`, `Link`, `Tags`, and `DependsOn` in 
 ```go
 import "github.com/cerberauth/harnessx/checkdef"
 
-type CheckDef = checkdef.CheckDef // ID, Name, Description, Link, Tags, DependsOn
+type CheckDef = checkdef.CheckDef // ID, Name, Description, Link, Tags, DependsOn, CVSSVector, CVSSScore, CWEID, CAPECID, OWASP, Extra
 
 func MustParseCheckDefYAML(pkg string, data []byte) CheckDef
 func MustParseCheckDefTOML(pkg string, data []byte) CheckDef
@@ -174,6 +174,13 @@ tags:
   - algorithm
 depends_on:
   - baseline
+cvss_vector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
+cvss_score: 9.3
+cwe_id: "CWE-345"
+capec_id: "CAPEC-31"
+owasp: "API2:2023"
+extra:
+  custom_field: custom_value # def-specific fields this package doesn't model yet
 ```
 
 `NewCheck` / `NewResourceCheck` turn a `CheckDef` plus a run function into a `harnessx.Check`, so a check only supplies what makes it different — the metadata fields are wired for you:

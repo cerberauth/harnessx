@@ -13,8 +13,16 @@ func TestMustParseCheckDefJSON(t *testing.T) {
   "description": %q,
   "link": %q,
   "tags": [%q],
-  "depends_on": [%q, %q]
-}`, testCheckID, testCheckName, testCheckDescription, testCheckLink, testCheckTag, testCheckDep1, testCheckDep2))
+  "depends_on": [%q, %q],
+  "cvss_vector": %q,
+  "cvss_score": %v,
+  "cwe_id": %q,
+  "capec_id": %q,
+  "owasp": %q,
+  "extra": {
+    %q: %q
+  }
+}`, testCheckID, testCheckName, testCheckDescription, testCheckLink, testCheckTag, testCheckDep1, testCheckDep2, testCheckCVSSVector, testCheckCVSSScore, testCheckCWEID, testCheckCAPECID, testCheckOWASP, testCheckExtraKey, testCheckExtraValue))
 
 	want := wantTestCheckDef()
 
