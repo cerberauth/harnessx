@@ -72,14 +72,14 @@ func run() error {
 	client := probe.New(probe.WithMaxRetries(0)).Client()
 
 	// capture performs an HTTP request and reduces it to a harnessx.Snapshot,
-	// keeping the full probe.Attempt in Data for comparators that need more
-	// than the status code.
+	// keeping the full response (headers, body, duration) for comparators
+	// that need more than the status code.
 	capture := func(ctx context.Context, req *http.Request) (harnessx.Snapshot, error) {
-		a, err := probe.Do(ctx, client, req)
+		statusCode, header, body, duration, err := probe.Do(ctx, client, req)
 		if err != nil {
 			return harnessx.Snapshot{}, err
 		}
-		return harnessx.Snapshot{StatusCode: a.StatusCode, Data: a}, nil
+		return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
 	}
 
 	target := harnessx.Target{URL: srv.URL, Host: "local-test-api"}
@@ -105,7 +105,7 @@ func run() error {
 	// every resource and stores it for BaselineFromCheck to read back.
 	baselineProbe := harnessx.CaptureBaselineCheck("baseline-probe", "Baseline Probe",
 		func(ctx context.Context, _ harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL, nil)
+			req, err := harnessx.NewRequestFromResource(ctx, r)
 			if err != nil {
 				return harnessx.Snapshot{}, err
 			}
@@ -120,7 +120,7 @@ func run() error {
 		DependsOn: []harnessx.CheckID{"baseline-probe"},
 		Baseline:  harnessx.BaselineFromCheck("baseline-probe"),
 		Capture: func(ctx context.Context, _ harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL, nil)
+			req, err := harnessx.NewRequestFromResource(ctx, r)
 			if err != nil {
 				return harnessx.Snapshot{}, err
 			}
@@ -137,11 +137,10 @@ func run() error {
 		Baseline:  harnessx.BaselineFromResource(),
 		Compare:   bypassComparator,
 		Capture: func(ctx context.Context, _ harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL, nil)
+			req, err := harnessx.NewRequestFromResource(ctx, r, probe.WithHeader("X-Debug-Override", "true"))
 			if err != nil {
 				return harnessx.Snapshot{}, err
 			}
-			req.Header.Set("X-Debug-Override", "true")
 			return capture(ctx, req)
 		},
 	})

@@ -3,15 +3,21 @@ package harnessx
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
+
+	"github.com/cerberauth/harnessx/probe"
 )
 
 // Snapshot is a captured response, reduced to whatever a comparator needs to
 // judge it. StatusCode is the convenience field the default comparator uses;
-// Data carries anything else (headers, body, timing, a protocol-specific
-// type such as probe.Attempt) for custom comparators to inspect.
+// Header, Body, and Duration carry the full response for comparators that
+// need more; Data carries anything else custom comparators want to inspect.
 type Snapshot struct {
 	StatusCode int
+	Header     http.Header
+	Body       []byte
+	Duration   time.Duration
 	Data       any
 }
 
@@ -68,6 +74,28 @@ func CompareStatusCode(baseline, current Snapshot) []Observation {
 		Title:       "Response deviates from baseline",
 		Description: fmt.Sprintf("baseline status was %d, got %d", baseline.StatusCode, current.StatusCode),
 	}}
+}
+
+// ProbeAndCompareBaseline sends the request returned by build via probe.Do,
+// keeping the full response (headers, body, duration) in the Snapshot for
+// comparators that need more than the status code, and compares the
+// resulting snapshot against the baseline stored under baselineID. It
+// returns the current snapshot and whether the response deviated from the
+// baseline.
+func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error) {
+	req, err := build(ctx)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	statusCode, header, body, duration, err := probe.Do(ctx, p.Client(), req)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+
+	current := Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}
+	baseline, _ := GetData[Snapshot](store, baselineID)
+	vulnerable := len(CompareStatusCode(baseline, current)) > 0
+	return current, vulnerable, nil
 }
 
 // BaselineCheckConfig configures a baseline-comparison check built by NewBaselineCheck.

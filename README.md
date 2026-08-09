@@ -307,11 +307,14 @@ engine := harnessx.New(
 
 Baseline comparison detects the case where an endpoint's response *changes* in a way that indicates a bug — the canonical example being an endpoint that normally answers `401 Unauthorized` but, because of a broken authorization check, answers `200 OK` instead.
 
-A `Baseline` is just a `Snapshot{StatusCode int, Data any}` — by default only the status code is compared, but `Data` can carry the full response (headers, body, a `probe.Attempt`, ...) for custom comparators to inspect.
+A `Baseline` is just a `Snapshot{StatusCode int, Header http.Header, Body []byte, Duration time.Duration, Data any}` — by default only the status code is compared, but `Header`/`Body`/`Duration` carry the full response, and `Data` can carry anything else, for custom comparators to inspect.
 
 ```go
 type Snapshot struct {
     StatusCode int
+    Header     http.Header
+    Body       []byte
+    Duration   time.Duration
     Data       any
 }
 type Baseline = Snapshot
@@ -354,6 +357,17 @@ bypassCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
 ```
 
 For targets with no per-resource dimension (a single token, a single endpoint), use the `ScopeGlobal` counterparts — `NewGlobalBaselineCheck`, `CaptureGlobalBaselineCheck`, `StaticGlobalBaseline`, `BaselineFromGlobalCheck` — same shape, minus the `Resource` param.
+
+For checks that probe by swapping/omitting a credential (token, API key, session ID), `harnessx.ProbeAndCompareBaseline` takes a `probe.RequestBuilder` and skips the `Capture`/`Compare` wiring entirely:
+
+```go
+_, vulnerable, err := harnessx.ProbeAndCompareBaseline(ctx, p,
+    func(ctx context.Context) (*http.Request, error) {
+        return probe.NewRequest(ctx, http.MethodGet, resource.URL, nil, probe.WithBearerToken(forgedToken))
+    }, store, "baseline-probe")
+```
+
+It builds the request via `probe.NewRequest` plus a named credential mutator (`WithBearerToken`, `WithBasicAuth`, `WithAPIKeyHeader`, `WithAPIKeyQuery`, `WithAuthCookie`, `WithFormCredential`), sends it via `probe.Do`, and diffs the resulting `Snapshot` against the baseline stored under `"baseline-probe"`.
 
 See the [Baseline Comparison guide](/guides/baseline) and [`examples/baseline-scan`](./examples/baseline-scan/main.go) for a full runnable scenario.
 
@@ -404,7 +418,7 @@ func SkipResourceWhen(fn func(ctx context.Context, target Target, resource Resou
 ### Baseline Comparison
 
 ```go
-type Snapshot struct { StatusCode int; Data any }
+type Snapshot struct { StatusCode int; Header http.Header; Body []byte; Duration time.Duration; Data any }
 type Baseline = Snapshot
 
 // BaselineSource resolves the baseline for a resource; ok=false skips the check.
@@ -455,6 +469,32 @@ type GlobalBaselineCheckConfig struct {
 
 func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check
 func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check
+
+// probe package: build a request from method+URL, then apply small
+// composable mutators to it.
+type RequestMutator func(*http.Request) error
+type RequestBuilder func(ctx context.Context) (*http.Request, error)
+
+func NewRequest(ctx context.Context, method, target string, body io.Reader, mutators ...RequestMutator) (*http.Request, error)
+func WithHeader(name, value string) RequestMutator
+func WithCookie(cookie *http.Cookie) RequestMutator
+func WithQuery(name, value string) RequestMutator
+
+// Named credential mutators — one per auth use case.
+func WithBearerToken(token string) RequestMutator
+func WithBasicAuth(username, password string) RequestMutator
+func WithAPIKeyHeader(name, value string) RequestMutator
+func WithAPIKeyQuery(name, value string) RequestMutator
+func WithAuthCookie(name, value string) RequestMutator
+func WithFormCredential(name, value string) RequestMutator
+
+// NewRequestFromResource builds a request for r, defaulting to GET when
+// r.Method is empty.
+func NewRequestFromResource(ctx context.Context, r Resource, mutators ...probe.RequestMutator) (*http.Request, error)
+
+// ProbeAndCompareBaseline sends the request returned by build via probe.Do,
+// and compares the resulting Snapshot against the baseline stored under baselineID.
+func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error)
 ```
 
 ### Options

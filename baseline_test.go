@@ -2,7 +2,11 @@ package harnessx
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/cerberauth/harnessx/probe"
 )
 
 const (
@@ -432,5 +436,75 @@ func TestCaptureGlobalBaselineCheck_FeedsBaselineFromGlobalCheck(t *testing.T) {
 	}
 	if len(summary.Observations) != 1 {
 		t.Fatalf("Observations = %v, want 1 (401 baseline vs 200 current)", summary.Observations)
+	}
+}
+
+// --- ProbeAndCompareBaseline ---
+
+func TestProbeAndCompareBaseline_VulnerableWhenStatusDiffersFromBaseline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	store := NewStaticResultStore(ResultData(testCheckIDProbe, Snapshot{StatusCode: 401}))
+	build := func(ctx context.Context) (*http.Request, error) {
+		return probe.NewRequest(ctx, http.MethodGet, srv.URL, nil, probe.WithBearerToken("tok"))
+	}
+	snap, vulnerable, err := ProbeAndCompareBaseline(context.Background(), probe.New(), build, store, testCheckIDProbe)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !vulnerable {
+		t.Error("vulnerable = false, want true")
+	}
+	if snap.StatusCode != http.StatusOK {
+		t.Errorf("StatusCode = %d, want %d", snap.StatusCode, http.StatusOK)
+	}
+}
+
+func TestProbeAndCompareBaseline_NotVulnerableWhenStatusMatchesBaseline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	store := NewStaticResultStore(ResultData(testCheckIDProbe, Snapshot{StatusCode: http.StatusUnauthorized}))
+	build := func(ctx context.Context) (*http.Request, error) {
+		return probe.NewRequest(ctx, http.MethodGet, srv.URL, nil, probe.WithBearerToken("tok"))
+	}
+	_, vulnerable, err := ProbeAndCompareBaseline(context.Background(), probe.New(), build, store, testCheckIDProbe)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vulnerable {
+		t.Error("vulnerable = true, want false")
+	}
+}
+
+func TestProbeAndCompareBaseline_InvalidTarget_ReturnsError(t *testing.T) {
+	store := NewStaticResultStore()
+	build := func(ctx context.Context) (*http.Request, error) {
+		return probe.NewRequest(ctx, http.MethodGet, "://bad-url", nil, probe.WithBearerToken("tok"))
+	}
+	_, _, err := ProbeAndCompareBaseline(context.Background(), probe.New(), build, store, testCheckIDProbe)
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+}
+
+func TestProbeAndCompareBaseline_ClientDoError_ReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.Close() // closed server: connection refused
+
+	store := NewStaticResultStore(ResultData(testCheckIDProbe, Snapshot{StatusCode: http.StatusOK}))
+	build := func(ctx context.Context) (*http.Request, error) {
+		return probe.NewRequest(ctx, http.MethodGet, srv.URL, nil, probe.WithBearerToken("tok"))
+	}
+	_, _, err := ProbeAndCompareBaseline(context.Background(), probe.New(), build, store, testCheckIDProbe)
+	if err == nil {
+		t.Error("expected error, got nil")
 	}
 }
