@@ -250,6 +250,12 @@ type CheckDef struct {
   Link        string
   Tags        []string
   DependsOn   []string
+  CVSSVector  string
+  CVSSScore   float64
+  CWEID       string
+  CAPECID     string
+  OWASP       string
+  Extra       map[string]any // def-specific fields this package doesn't model yet, nested under "extra"
 }
 
 func (d CheckDef) DependsOnIDs() []harnessx.CheckID
