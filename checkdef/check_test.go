@@ -88,3 +88,69 @@ func TestNewResourceCheck(t *testing.T) {
 		t.Errorf("Concurrency: want 4, got %d", check.Concurrency)
 	}
 }
+
+func TestNewVariantCheck(t *testing.T) {
+	def := wantTestCheckDef()
+	run := func(_ context.Context, _ harnessx.Target, _ string, _ harnessx.ResultStore) (harnessx.Result, error) {
+		return harnessx.Result{}, nil
+	}
+
+	check := NewVariantCheck(def, run, WithVariants("none", "NONE", "None"))
+
+	if check.Scope != harnessx.ScopeGlobal {
+		t.Errorf("Scope: want ScopeGlobal, got %v", check.Scope)
+	}
+	if check.RunVariant == nil {
+		t.Error("RunVariant: want non-nil")
+	}
+	if check.Run != nil {
+		t.Error("Run: want nil on a NewVariantCheck")
+	}
+	if len(check.Variants) != 3 {
+		t.Fatalf("Variants: want 3, got %d", len(check.Variants))
+	}
+	if check.VariantMode != harnessx.VariantsSequential {
+		t.Errorf("VariantMode: want VariantsSequential (default), got %v", check.VariantMode)
+	}
+}
+
+func TestNewVariantCheck_ParallelMode(t *testing.T) {
+	def := wantTestCheckDef()
+	run := func(_ context.Context, _ harnessx.Target, _ string, _ harnessx.ResultStore) (harnessx.Result, error) {
+		return harnessx.Result{}, nil
+	}
+
+	check := NewVariantCheck(def, run,
+		WithVariants("none", "NONE"),
+		WithVariantMode(harnessx.VariantsParallel),
+	)
+
+	if check.VariantMode != harnessx.VariantsParallel {
+		t.Errorf("VariantMode: want VariantsParallel, got %v", check.VariantMode)
+	}
+}
+
+func TestNewVariantResourceCheck(t *testing.T) {
+	def := wantTestCheckDef()
+	run := func(_ context.Context, _ harnessx.Target, _ harnessx.Resource, _ string, _ harnessx.ResultStore) (harnessx.Result, error) {
+		return harnessx.Result{}, nil
+	}
+
+	check := NewVariantResourceCheck(def, run, WithVariants("v1", "v2"), WithConcurrency(4))
+
+	if check.Scope != harnessx.ScopePerResource {
+		t.Errorf("Scope: want ScopePerResource, got %v", check.Scope)
+	}
+	if check.RunResourceVariant == nil {
+		t.Error("RunResourceVariant: want non-nil")
+	}
+	if check.RunResource != nil {
+		t.Error("RunResource: want nil on a NewVariantResourceCheck")
+	}
+	if len(check.Variants) != 2 {
+		t.Fatalf("Variants: want 2, got %d", len(check.Variants))
+	}
+	if check.Concurrency != 4 {
+		t.Errorf("Concurrency: want 4, got %d", check.Concurrency)
+	}
+}

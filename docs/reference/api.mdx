@@ -58,6 +58,7 @@ An issue or noteworthy outcome found by a check.
 type Observation struct {
   CheckID     CheckID
   ResourceID  string
+  Variant     string // set automatically for checks that use Variants, if left blank
   Title       string
   Description string
   Evidence    string
@@ -76,8 +77,36 @@ type Result struct {
   Resources    []Resource
   Duration     time.Duration
   Err          error
+  Attempts     []Attempt // one entry per variant, for checks that use Variants
 }
 ```
+
+### Attempt / VariantMode
+
+The outcome of a single variant of a `Variants` check — see [Check](#check) and [NewVariantCheck / NewVariantResourceCheck](#newvariantcheck--newvariantresourcecheck).
+
+```go
+type Attempt struct {
+  Variant      string
+  Observations []Observation
+  Resources    []Resource
+  Duration     time.Duration
+  Data         any
+  Err          error
+}
+
+type VariantCheckFunc func(ctx context.Context, target Target, variant string, store ResultStore) (Result, error)
+type VariantResourceCheckFunc func(ctx context.Context, target Target, resource Resource, variant string, store ResultStore) (Result, error)
+
+type VariantMode int
+
+const (
+  VariantsSequential VariantMode = iota // default: variants run one at a time, in order
+  VariantsParallel                      // variants run concurrently
+)
+```
+
+A panic inside one variant's run function is recovered onto that variant's `Attempt.Err` — it does not abort the other variants or the rest of the scan.
 
 ### Snapshot / Baseline
 
@@ -226,6 +255,12 @@ type Check struct {
   Condition   Condition
   Run         func(context.Context, Target) (Result, error)
   RunResource func(context.Context, Target, Resource) (Result, error)
+
+  // Variants: run the same check once per variant, instead of Run/RunResource.
+  Variants           []string
+  VariantMode        VariantMode
+  RunVariant         VariantCheckFunc
+  RunResourceVariant VariantResourceCheckFunc
 }
 ```
 
@@ -235,8 +270,12 @@ type Check struct {
 - `Timeout`: Max execution time (optional, no timeout if 0)
 - `DependsOn`: List of check IDs this depends on (optional)
 - `Condition`: Skip condition (optional)
-- `Run`: Function to run for global checks (required if `Scope == ScopeGlobal`)
-- `RunResource`: Function to run for per-resource checks (required if `Scope == ScopePerResource`)
+- `Run`: Function to run for global checks (required if `Scope == ScopeGlobal` and `Variants` is empty)
+- `RunResource`: Function to run for per-resource checks (required if `Scope == ScopePerResource` and `Variants` is empty)
+- `Variants`: Attempt variants of the same check (e.g. `alg: none` casings); when set, `RunVariant`/`RunResourceVariant` is used instead of `Run`/`RunResource`
+- `VariantMode`: `VariantsSequential` (default) or `VariantsParallel` — how `Variants` are executed
+- `RunVariant`: Function invoked once per variant (required if `Scope == ScopeGlobal` and `Variants` is non-empty)
+- `RunResourceVariant`: Function invoked once per variant, per resource (required if `Scope == ScopePerResource` and `Variants` is non-empty)
 
 ### CheckDef
 
@@ -282,7 +321,18 @@ func NewResourceCheck(def CheckDef, run harnessx.ResourceCheckFunc, opts ...Opti
 func WithSkip(s harnessx.SkipDecision) Option
 func WithConditions(c ...harnessx.Condition) Option
 func WithTimeout(d time.Duration) Option
-func WithConcurrency(n int) Option // meaningful on NewResourceCheck only
+func WithConcurrency(n int) Option // meaningful on NewResourceCheck / NewVariantResourceCheck only
+func WithVariants(variants ...string) Option
+func WithVariantMode(mode harnessx.VariantMode) Option // default VariantsSequential
+```
+
+### NewVariantCheck / NewVariantResourceCheck
+
+`checkdef` package. Same wiring as `NewCheck` / `NewResourceCheck`, but the run function takes a `variant string` and is invoked once per entry passed to `WithVariants(...)` — see [Attempt / VariantMode](#attempt--variantmode).
+
+```go
+func NewVariantCheck(def CheckDef, run harnessx.VariantCheckFunc, opts ...Option) harnessx.Check
+func NewVariantResourceCheck(def CheckDef, run harnessx.VariantResourceCheckFunc, opts ...Option) harnessx.Check
 ```
 
 ### Condition

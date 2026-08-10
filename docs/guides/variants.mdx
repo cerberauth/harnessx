@@ -1,0 +1,109 @@
+---
+title: Variants
+description: Run one check definition as several attempt variants
+sidebar:
+  order: 9
+---
+
+## Overview
+
+Some checks are one exploit tried in several equivalent forms — a JWT `alg: none` bypass attempted as `"none"`, `"NONE"`, `"None"`. Rather than registering a near-duplicate `Check` per casing (same `ID` semantics, same `Skip`, same `Conditions`, same `DependsOn`), give a single check a `Variants` list and a variant-aware run function. The engine invokes it once per variant and merges the outcomes back into one `Result`.
+
+## Global checks
+
+```go
+algNone := harnessx.Check{
+  ID:       "alg-none",
+  Scope:    harnessx.ScopeGlobal,
+  Variants: []string{"none", "NONE", "None"},
+  RunVariant: func(ctx context.Context, target harnessx.Target, variant string, store harnessx.ResultStore) (harnessx.Result, error) {
+    if accepted := tryAlgNone(ctx, target, variant); accepted {
+      return harnessx.Result{
+        Observations: []harnessx.Observation{{Title: "server accepted alg=" + variant}},
+      }, nil
+    }
+    return harnessx.Result{}, nil
+  },
+}
+```
+
+`RunVariant` replaces `Run` — a check sets one or the other, not both. Every observation returned by a variant is copied onto the merged `Result.Observations`, with `Observation.Variant` filled in automatically if the run function left it blank.
+
+## Per-resource checks
+
+`ScopePerResource` checks use `RunResourceVariant` instead of `RunResource`. Every variant runs against every resource:
+
+```go
+credentialCasing := harnessx.Check{
+  ID:        "endpoint-alg-none",
+  Scope:     harnessx.ScopePerResource,
+  DependsOn: []harnessx.CheckID{"discover-endpoints"},
+  Variants:  []string{"none", "NONE", "None"},
+  RunResourceVariant: func(ctx context.Context, target harnessx.Target, res harnessx.Resource, variant string, store harnessx.ResultStore) (harnessx.Result, error) {
+    return probeEndpoint(ctx, res, variant), nil
+  },
+}
+```
+
+## Sequential vs parallel
+
+`VariantMode` controls how the variants of a single check run:
+
+```go
+type VariantMode int
+
+const (
+  VariantsSequential VariantMode = iota // default (zero value)
+  VariantsParallel
+)
+```
+
+- **`VariantsSequential`** (default) — variants run one at a time, in list order. Use this when variants share rate-limited state, or when trying them in a specific order matters (e.g. cheapest/most-likely-to-succeed first).
+- **`VariantsParallel`** — variants run concurrently. Use this when variants are independent probes and you want the wall-clock cost of the slowest one, not the sum of all of them.
+
+```go
+check := harnessx.Check{
+  ID:          "alg-none",
+  Variants:    []string{"none", "NONE", "None"},
+  VariantMode: harnessx.VariantsParallel,
+  RunVariant:  ...,
+}
+```
+
+Whichever mode is used, the check's `Timeout` applies to the whole batch of variants, not to each one individually.
+
+## Inspecting attempts
+
+The merged `Result` carries one `Attempt` per variant, in `Result.Attempts`:
+
+```go
+type Attempt struct {
+  Variant      string
+  Observations []Observation
+  Resources    []Resource
+  Duration     time.Duration
+  Data         any
+  Err          error
+}
+```
+
+This makes "tried five variants, found nothing" distinguishable from "never ran" — useful both for reporting coverage and for debugging a check that isn't finding what you expect. The built-in `reporters.OTelReporter` records one span event per attempt, tagged with its variant, alongside a `check.attempts` count attribute.
+
+A panic inside one variant's run function is recovered onto that variant's `Attempt.Err` — it does not abort the other variants or fail the whole check outright; the merged `Result.Err` is set from the first variant that errored (in variant order), while the other variants' observations are still collected.
+
+## checkdef
+
+The `checkdef` subpackage mirrors this with `NewVariantCheck` / `NewVariantResourceCheck`, plus `WithVariants(...)` and `WithVariantMode(...)` options alongside the existing `WithSkip`, `WithConditions`, `WithTimeout`, and `WithConcurrency`:
+
+```go
+var Check = checkdef.NewVariantCheck(def, run,
+  checkdef.WithVariants("none", "NONE", "None"),
+  checkdef.WithVariantMode(harnessx.VariantsParallel),
+)
+```
+
+## Best practices
+
+- Keep `Variants` to genuinely equivalent forms of the same exploit — if two attempts test conceptually different things, they're better as two separate `Check`s with their own `ID`s.
+- Default to `VariantsSequential` unless you've confirmed the variants are safe to run concurrently against the target (shared rate limits, stateful sessions, etc.).
+- Read `Result.Attempts` (not just `Result.Observations`) when you need to know which specific variant triggered a finding, or to report on variants that were tried but found nothing.

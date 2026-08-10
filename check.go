@@ -58,6 +58,7 @@ const (
 type Observation struct {
 	CheckID     CheckID
 	ResourceID  string
+	Variant     string
 	Title       string
 	Description string
 	Evidence    string
@@ -75,6 +76,16 @@ type Result struct {
 	Metadata     map[string]string
 	Data         any
 	Err          error
+	Attempts     []Attempt
+}
+
+type Attempt struct {
+	Variant      string
+	Observations []Observation
+	Resources    []Resource
+	Duration     time.Duration
+	Data         any
+	Err          error
 }
 
 type ResultStore interface {
@@ -88,7 +99,18 @@ type CheckFunc func(ctx context.Context, target Target, store ResultStore) (Resu
 
 type ResourceCheckFunc func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error)
 
+type VariantCheckFunc func(ctx context.Context, target Target, variant string, store ResultStore) (Result, error)
+
+type VariantResourceCheckFunc func(ctx context.Context, target Target, resource Resource, variant string, store ResultStore) (Result, error)
+
 type Condition func(store ResultStore) bool
+
+type VariantMode int
+
+const (
+	VariantsSequential VariantMode = iota
+	VariantsParallel
+)
 
 type Check struct {
 	ID          CheckID
@@ -104,6 +126,11 @@ type Check struct {
 	Scope       CheckScope
 	Run         CheckFunc
 	RunResource ResourceCheckFunc
+
+	Variants           []string
+	VariantMode        VariantMode
+	RunVariant         VariantCheckFunc
+	RunResourceVariant VariantResourceCheckFunc
 
 	Timeout     time.Duration
 	Concurrency int

@@ -182,11 +182,20 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check) (ScanSu
 			return finalize(fmt.Errorf("%w: %q", ErrDuplicateCheckID, c.ID))
 		}
 		seen[c.ID] = struct{}{}
-		if c.Scope == ScopePerResource && c.RunResource == nil {
-			return finalize(fmt.Errorf("harnessx: check %q has ScopePerResource but no RunResource set", c.ID))
-		}
-		if c.Scope == ScopeGlobal && c.Run == nil {
-			return finalize(fmt.Errorf("harnessx: check %q has ScopeGlobal but no Run set", c.ID))
+		if len(c.Variants) > 0 {
+			if c.Scope == ScopePerResource && c.RunResourceVariant == nil {
+				return finalize(fmt.Errorf("harnessx: check %q has ScopePerResource with Variants but no RunResourceVariant set", c.ID))
+			}
+			if c.Scope == ScopeGlobal && c.RunVariant == nil {
+				return finalize(fmt.Errorf("harnessx: check %q has ScopeGlobal with Variants but no RunVariant set", c.ID))
+			}
+		} else {
+			if c.Scope == ScopePerResource && c.RunResource == nil {
+				return finalize(fmt.Errorf("harnessx: check %q has ScopePerResource but no RunResource set", c.ID))
+			}
+			if c.Scope == ScopeGlobal && c.Run == nil {
+				return finalize(fmt.Errorf("harnessx: check %q has ScopeGlobal but no Run set", c.ID))
+			}
 		}
 	}
 
@@ -263,9 +272,18 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check) (ScanSu
 					for _, r := range reporters {
 						r.OnCheckStart(chk, target, nil)
 					}
-					result := runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
-						return chk.Run(checkCtx, target, snapshot)
-					})
+					var result Result
+					if len(chk.Variants) > 0 {
+						result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
+							return runVariants(checkCtx, chk.Variants, chk.VariantMode, func(vctx context.Context, variant string) (Result, error) {
+								return chk.RunVariant(vctx, target, variant, snapshot)
+							}), nil
+						})
+					} else {
+						result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
+							return chk.Run(checkCtx, target, snapshot)
+						})
+					}
 					result.CheckID = chk.ID
 					for _, r := range reporters {
 						r.OnCheckComplete(result)
@@ -331,9 +349,18 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check) (ScanSu
 						for _, r := range reporters {
 							r.OnCheckStart(chk, target, &res)
 						}
-						result := runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
-							return chk.RunResource(checkCtx, target, res, snapshot)
-						})
+						var result Result
+						if len(chk.Variants) > 0 {
+							result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
+								return runVariants(checkCtx, chk.Variants, chk.VariantMode, func(vctx context.Context, variant string) (Result, error) {
+									return chk.RunResourceVariant(vctx, target, res, variant, snapshot)
+								}), nil
+							})
+						} else {
+							result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
+								return chk.RunResource(checkCtx, target, res, snapshot)
+							})
+						}
 						result.CheckID = chk.ID
 						result.ResourceID = res.ID
 						for _, r := range reporters {
