@@ -18,6 +18,7 @@
 | Resource discovery | Global checks can emit `Resource` objects consumed by downstream per-resource checks |
 | Conditional execution | Skip checks based on prior results using composable `Condition` predicates |
 | Skip decisions | Skip a whole check or individual resources at runtime via `SkipAlways` / `SkipWhen` / `SkipResourceWhen` |
+| Variants | Run one check definition as several attempt variants (e.g. `alg: none` casings) — sequential by default, or parallel |
 | Bounded concurrency | Separate semaphores for level-wide and per-resource parallelism |
 | Panic recovery | A panicking check is recorded as failed; the scan continues uninterrupted |
 | Context cancellation | Full `context.Context` propagation with per-check timeouts |
@@ -143,6 +144,13 @@ type Check struct {
     Run         CheckFunc      // used when Scope == ScopeGlobal
     RunResource ResourceCheckFunc // used when Scope == ScopePerResource
 
+    // Variants: run the same check definition once per variant instead
+    // (mutually exclusive with Run/RunResource — see "Variants" below).
+    Variants           []string
+    VariantMode        VariantMode // VariantsSequential (default) or VariantsParallel
+    RunVariant         VariantCheckFunc         // used when Scope == ScopeGlobal
+    RunResourceVariant VariantResourceCheckFunc // used when Scope == ScopePerResource
+
     Timeout     time.Duration  // 0 → engine default (30s)
     Concurrency int            // per-resource parallelism; 0 → engine default
 }
@@ -189,10 +197,16 @@ extra:
 func NewCheck(def CheckDef, run harnessx.CheckFunc, opts ...Option) harnessx.Check         // Scope: ScopeGlobal
 func NewResourceCheck(def CheckDef, run harnessx.ResourceCheckFunc, opts ...Option) harnessx.Check // Scope: ScopePerResource
 
+// Same wiring, but run is invoked once per WithVariants entry — see "Variants".
+func NewVariantCheck(def CheckDef, run harnessx.VariantCheckFunc, opts ...Option) harnessx.Check                 // Scope: ScopeGlobal
+func NewVariantResourceCheck(def CheckDef, run harnessx.VariantResourceCheckFunc, opts ...Option) harnessx.Check // Scope: ScopePerResource
+
 func WithSkip(s harnessx.SkipDecision) Option
 func WithConditions(c ...harnessx.Condition) Option
 func WithTimeout(d time.Duration) Option
-func WithConcurrency(n int) Option // NewResourceCheck only
+func WithConcurrency(n int) Option // NewResourceCheck / NewVariantResourceCheck only
+func WithVariants(variants ...string) Option
+func WithVariantMode(mode harnessx.VariantMode) Option // default VariantsSequential
 ```
 
 ```go
@@ -219,6 +233,54 @@ var Check = checkdef.NewCheck(def, run,
 |---|---|---|
 | `ScopeGlobal` | Once per scan | `Run(ctx, target, store) (Result, error)` |
 | `ScopePerResource` | Once per resource discovered so far | `RunResource(ctx, target, resource, store) (Result, error)` |
+
+### Variants
+
+Some checks are one exploit with several equivalent forms — a JWT `alg: none` bypass tried as `"none"`, `"NONE"`, `"None"`. Rather than registering three near-duplicate checks (same `ID`, `Skip`, `Conditions`, `DependsOn`), give a single check a `Variants` list and a variant-aware run function. The engine invokes it once per variant and merges the results back into one `Result`:
+
+```go
+algNone := harnessx.Check{
+    ID:       "alg-none",
+    Scope:    harnessx.ScopeGlobal,
+    Variants: []string{"none", "NONE", "None"},
+    RunVariant: func(ctx context.Context, t harnessx.Target, variant string, _ harnessx.ResultStore) (harnessx.Result, error) {
+        if accepted := tryAlgNone(ctx, t, variant); accepted {
+            return harnessx.Result{
+                Observations: []harnessx.Observation{{Title: "server accepted alg=" + variant}},
+            }, nil
+        }
+        return harnessx.Result{}, nil
+    },
+}
+```
+
+- `VariantMode` controls how variants run: `VariantsSequential` (the default, zero value) runs them one at a time in list order; `VariantsParallel` runs them concurrently.
+- Each variant's outcome is recorded as an `Attempt` on the merged `Result.Attempts`, so a check that "found nothing" but tried five variants is distinguishable from one that never ran.
+- `Observation.Variant` is auto-filled with the variant name when a variant's run function leaves it empty, so downstream reporters and the `Result.Observations` slice know which variant produced each finding.
+- A panic in one variant is recovered and recorded on that variant's `Attempt.Err` — it does not abort the other variants.
+- `ScopePerResource` checks use `RunResourceVariant` instead of `RunVariant`, and run every variant against every resource.
+
+```go
+type VariantCheckFunc func(ctx context.Context, target Target, variant string, store ResultStore) (Result, error)
+type VariantResourceCheckFunc func(ctx context.Context, target Target, resource Resource, variant string, store ResultStore) (Result, error)
+
+type VariantMode int
+const (
+    VariantsSequential VariantMode = iota // default
+    VariantsParallel
+)
+
+type Attempt struct {
+    Variant      string
+    Observations []Observation
+    Resources    []Resource
+    Duration     time.Duration
+    Data         any
+    Err          error
+}
+```
+
+`checkdef.NewVariantCheck` / `checkdef.NewVariantResourceCheck` wire a `CheckDef` plus a variant run function the same way `NewCheck` / `NewResourceCheck` do — see [Check Definitions](#check-definitions) above.
 
 ### Resource Discovery
 
@@ -361,6 +423,8 @@ type Reporter interface {
 ```
 
 `OnScanStart` fires before any check runs with the total registered check count — use it to initialise a progress bar. `OnScanComplete` is **always** called — even after a context cancellation or early error.
+
+For a check with `Variants`, `OnCheckComplete` still fires once with the merged `Result` — inspect `Result.Attempts` to see the outcome of each variant individually (the built-in `OTelReporter` records one span event per attempt, tagged with its variant).
 
 ```go
 engine := harnessx.New(
@@ -560,6 +624,35 @@ func NewRequestFromResource(ctx context.Context, r Resource, mutators ...probe.R
 // ProbeAndCompareBaseline sends the request returned by build via probe.Do,
 // and compares the resulting Snapshot against the baseline stored under baselineID.
 func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error)
+```
+
+### Variants
+
+```go
+type VariantCheckFunc func(ctx context.Context, target Target, variant string, store ResultStore) (Result, error)
+type VariantResourceCheckFunc func(ctx context.Context, target Target, resource Resource, variant string, store ResultStore) (Result, error)
+
+type VariantMode int
+const (
+    VariantsSequential VariantMode = iota // default: variants run one at a time, in order
+    VariantsParallel                      // variants run concurrently
+)
+
+// Attempt records the outcome of a single variant run.
+type Attempt struct {
+    Variant      string
+    Observations []Observation
+    Resources    []Resource
+    Duration     time.Duration
+    Data         any
+    Err          error
+}
+
+// checkdef helpers, same wiring as NewCheck / NewResourceCheck.
+func checkdef.NewVariantCheck(def CheckDef, run harnessx.VariantCheckFunc, opts ...checkdef.Option) harnessx.Check
+func checkdef.NewVariantResourceCheck(def CheckDef, run harnessx.VariantResourceCheckFunc, opts ...checkdef.Option) harnessx.Check
+func checkdef.WithVariants(variants ...string) checkdef.Option
+func checkdef.WithVariantMode(mode harnessx.VariantMode) checkdef.Option
 ```
 
 ### Options

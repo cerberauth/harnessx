@@ -121,6 +121,28 @@ func TestOTelReporter_GlobalScopeSpanLifecycle(t *testing.T) {
 	})
 }
 
+func TestOTelReporter_OnCheckComplete_withAttempts(t *testing.T) {
+	const checkID harnessx.CheckID = "alg-none"
+	const acceptedVariant = "NONE"
+
+	r := newTestOTelReporter(t)
+	r.OnCheckStart(harnessx.Check{ID: checkID}, harnessx.Target{}, nil)
+	r.OnCheckComplete(harnessx.Result{
+		CheckID:  checkID,
+		Duration: 15 * time.Millisecond,
+		Observations: []harnessx.Observation{
+			{CheckID: checkID, Variant: acceptedVariant, Title: "alg none accepted"},
+		},
+		Attempts: []harnessx.Attempt{
+			{Variant: "none", Duration: 5 * time.Millisecond},
+			{Variant: acceptedVariant, Duration: 5 * time.Millisecond, Observations: []harnessx.Observation{
+				{CheckID: checkID, Variant: acceptedVariant, Title: "alg none accepted"},
+			}},
+			{Variant: "None", Duration: 5 * time.Millisecond, Err: errors.New("timeout")},
+		},
+	})
+}
+
 func TestOTelReporter_ConcurrentPerResourceChecks(t *testing.T) {
 	r := newTestOTelReporter(t)
 	resources := []harnessx.Resource{

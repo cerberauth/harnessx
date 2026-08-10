@@ -23,6 +23,12 @@ type Check struct {
   DependsOn  []CheckID
   Run        func(context.Context, Target) (Result, error)
   RunResource func(context.Context, Target, Resource) (Result, error)
+
+  // Variants: run the same check once per variant instead of Run/RunResource — see "Variants" below.
+  Variants           []string
+  VariantMode        VariantMode
+  RunVariant         func(context.Context, Target, string) (Result, error)
+  RunResourceVariant func(context.Context, Target, Resource, string) (Result, error)
 }
 ```
 
@@ -90,6 +96,26 @@ harnessx.Check{
   },
 }
 ```
+
+## Variants
+
+A check with several equivalent attack forms — a JWT `alg: none` bypass tried as `"none"`, `"NONE"`, `"None"` — doesn't need one near-duplicate `Check` per casing. Give it a `Variants` list and a variant-aware run function instead; the engine invokes it once per variant, sharing the same `ID`, `Skip`, `Conditions`, and `DependsOn`:
+
+```go
+harnessx.Check{
+  ID:       "alg-none",
+  Scope:    harnessx.ScopeGlobal,
+  Variants: []string{"none", "NONE", "None"},
+  RunVariant: func(ctx context.Context, target harnessx.Target, variant string, store harnessx.ResultStore) (harnessx.Result, error) {
+    // try the "alg" header set to variant
+    return harnessx.Result{}, nil
+  },
+}
+```
+
+`VariantMode` picks how variants run — `VariantsSequential` (default, zero value) one at a time in order, or `VariantsParallel` concurrently. Each variant's outcome lands in `Result.Attempts` as an `Attempt{Variant, Observations, Resources, Duration, Data, Err}`, so a check that tried five variants and found nothing is distinguishable from one that never ran; `Observation.Variant` is filled in automatically when a variant leaves it blank. A panic in one variant is recovered onto that variant's `Attempt.Err` without aborting the others.
+
+`ScopePerResource` checks use `RunResourceVariant` instead, running every variant against every resource. The `checkdef` subpackage mirrors this with `NewVariantCheck` / `NewVariantResourceCheck` plus `WithVariants(...)` / `WithVariantMode(...)` options, alongside `NewCheck` / `NewResourceCheck`.
 
 ## Resources
 
@@ -228,6 +254,7 @@ An `Observation` describes an issue or noteworthy outcome found by a check.
 type Observation struct {
   CheckID     CheckID
   ResourceID  string
+  Variant     string // set automatically for checks that use Variants
   Title       string
   Description string
   Evidence    string
@@ -238,6 +265,7 @@ type Result struct {
   Skipped      bool
   Observations []Observation
   Resources    []Resource
+  Attempts     []Attempt // one entry per variant, for checks that use Variants
 }
 ```
 

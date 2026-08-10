@@ -125,6 +125,21 @@ func (o *OTelReporter) OnCheckComplete(result harnessx.Result) {
 			}
 		}
 
+		if len(result.Attempts) > 0 {
+			span.SetAttributes(attribute.Int("check.attempts", len(result.Attempts)))
+			for _, a := range result.Attempts {
+				attrs := []attribute.KeyValue{
+					attribute.String("variant", a.Variant),
+					attribute.Int("observations", len(a.Observations)),
+					attribute.Float64("duration_ms", float64(a.Duration.Microseconds())/1000),
+				}
+				if a.Err != nil {
+					attrs = append(attrs, attribute.String("error", a.Err.Error()))
+				}
+				span.AddEvent("check.attempt", trace.WithAttributes(attrs...))
+			}
+		}
+
 		if result.Err != nil {
 			span.RecordError(result.Err)
 			span.SetStatus(codes.Error, result.Err.Error())
