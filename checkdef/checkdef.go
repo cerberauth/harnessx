@@ -40,3 +40,71 @@ func (d CheckDef) DependsOnIDs() []harnessx.CheckID {
 	}
 	return ids
 }
+
+// WithName returns a copy of d with Name set, e.g. to relabel a check
+// loaded from a shared definition file.
+func (d CheckDef) WithName(name string) CheckDef {
+	d.Name = name
+	return d
+}
+
+// WithDescription returns a copy of d with Description set.
+func (d CheckDef) WithDescription(description string) CheckDef {
+	d.Description = description
+	return d
+}
+
+// WithLink returns a copy of d with Link set, e.g. to point at a
+// deployment-specific advisory page.
+func (d CheckDef) WithLink(link string) CheckDef {
+	d.Link = link
+	return d
+}
+
+// WithTags returns a copy of d with Tags set.
+func (d CheckDef) WithTags(tags ...string) CheckDef {
+	d.Tags = tags
+	return d
+}
+
+// WithDependsOn returns a copy of d with DependsOn set.
+func (d CheckDef) WithDependsOn(ids ...string) CheckDef {
+	d.DependsOn = ids
+	return d
+}
+
+// WithCVSSVector returns a copy of d with CVSSVector set.
+func (d CheckDef) WithCVSSVector(vector string) CheckDef {
+	d.CVSSVector = vector
+	return d
+}
+
+// WithCVSSScore returns a copy of d with CVSSScore set.
+func (d CheckDef) WithCVSSScore(score float64) CheckDef {
+	d.CVSSScore = score
+	return d
+}
+
+// WithCWEID returns a copy of d with CWEID set.
+func (d CheckDef) WithCWEID(id string) CheckDef {
+	d.CWEID = id
+	return d
+}
+
+// WithCAPECID returns a copy of d with CAPECID set.
+func (d CheckDef) WithCAPECID(id string) CheckDef {
+	d.CAPECID = id
+	return d
+}
+
+// WithOWASP returns a copy of d with OWASP set.
+func (d CheckDef) WithOWASP(owasp string) CheckDef {
+	d.OWASP = owasp
+	return d
+}
+
+// WithExtra returns a copy of d with Extra set.
+func (d CheckDef) WithExtra(extra map[string]any) CheckDef {
+	d.Extra = extra
+	return d
+}
