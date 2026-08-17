@@ -476,15 +476,16 @@ if err != nil {
 
 #### Run
 
-Execute all registered checks against a target.
+Execute all registered checks against a target, optionally narrowed for this call by `RunOption`s.
 
 ```go
-func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error)
+func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (ScanSummary, error)
 ```
 
 **Returns:**
 - `ScanSummary` with counts of passed, failed, skipped
 - `ScanError` on validation failure or check panic
+- `ErrUnknownDependency` if `WithOnly`/`WithExclude` drops a check another registered check depends on
 
 **Example:**
 ```go
@@ -493,6 +494,30 @@ summary, err := engine.Run(ctx, target)
 if err != nil {
   println("Scan error:", err)
 }
+
+// Only run these checks this time.
+summary, err = engine.Run(ctx, target, harnessx.WithOnly("auth-check", "schema-check"))
+
+// Run everything except these.
+summary, err = engine.Run(ctx, target, harnessx.WithExclude("slow-check"))
+```
+
+## Run Options
+
+### WithOnly
+
+Restricts a `Run` call to the given check IDs.
+
+```go
+func WithOnly(ids ...CheckID) RunOption
+```
+
+### WithExclude
+
+Removes the given check IDs from a `Run` call. Wins over `WithOnly` if an ID appears in both.
+
+```go
+func WithExclude(ids ...CheckID) RunOption
 ```
 
 ## Options

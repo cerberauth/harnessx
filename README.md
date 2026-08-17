@@ -409,6 +409,20 @@ restAuth := harnessx.Check{ID: "rest-auth", DependsOn: []harnessx.CheckID{"rest-
 gqlAuth  := harnessx.Check{ID: "gql-auth",  DependsOn: []harnessx.CheckID{"gql-introspection"}, Run: checkAuthFn}
 ```
 
+### Selecting checks for a run
+
+`WithOnly` and `WithExclude` narrow a single `Engine.Run` call to a subset of the engine's registered checks, without touching the registration itself. Unlike `Scenario`, the dependency graph is still built from `Register`/`WithChecks` — dropping a check that another depends on fails with `ErrUnknownDependency`, same as `RunScenario`.
+
+```go
+// Only run these checks this time.
+summary, err := engine.Run(ctx, target, harnessx.WithOnly("auth-check", "schema-check"))
+
+// Run everything except these.
+summary, err := engine.Run(ctx, target, harnessx.WithExclude("slow-check"))
+```
+
+`WithExclude` wins over `WithOnly` when both are passed and an ID appears in each.
+
 ### Reporter
 
 Implement the `Reporter` interface to receive real-time events:
@@ -521,9 +535,16 @@ func New(opts ...Option) *Engine
 // Register adds checks to the engine. Returns ErrDuplicateCheckID if any ID conflicts.
 func (e *Engine) Register(checks ...Check) error
 
-// Run executes all registered checks against target.
+// Run executes all registered checks against target, optionally narrowed
+// by WithOnly / WithExclude for this call only.
 // Always calls Reporter.OnScanComplete before returning.
-func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error)
+func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (ScanSummary, error)
+
+// WithOnly restricts a Run call to the given check IDs.
+func WithOnly(ids ...CheckID) RunOption
+
+// WithExclude removes the given check IDs from a Run call.
+func WithExclude(ids ...CheckID) RunOption
 
 // RunScenario executes only the checks in scenario against target.
 // Ignores checks registered via Register or WithChecks.

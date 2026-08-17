@@ -210,6 +210,17 @@ var gqlAuth  = harnessx.Check{ID: "gql-auth",  DependsOn: []harnessx.CheckID{"gq
 
 See the [Scenarios guide](/guides/scenarios) for the full API and patterns.
 
+## Selecting checks for a run
+
+`WithOnly` and `WithExclude` are `RunOption`s that narrow a single `Engine.Run` call to a subset of the engine's registered checks, without changing what's registered. The dependency graph is still built from the registered checks, so excluding a check that another depends on fails with `ErrUnknownDependency` — same failure mode as `RunScenario` dropping a dependency.
+
+```go
+summary, err := engine.Run(ctx, target, harnessx.WithOnly("auth-check", "schema-check"))
+summary, err := engine.Run(ctx, target, harnessx.WithExclude("slow-check"))
+```
+
+If an ID is in both `WithOnly` and `WithExclude`, exclusion wins. Use `Scenario` instead when the subset needs its own dependency graph or reuse across many runs; use `RunOption` for a quick, one-off include/exclude against checks already registered on the engine.
+
 ## Conditions
 
 Conditions allow you to skip checks based on prior results.
