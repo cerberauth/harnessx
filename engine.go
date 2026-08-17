@@ -134,12 +134,17 @@ func (e *Engine) Register(checks ...Check) error {
 	return nil
 }
 
-func (e *Engine) Run(ctx context.Context, target Target) (ScanSummary, error) {
+func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (ScanSummary, error) {
 	e.mu.RLock()
 	checks := make([]Check, len(e.checks))
 	copy(checks, e.checks)
 	e.mu.RUnlock()
-	return e.run(ctx, target, checks)
+
+	var cfg runConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return e.run(ctx, target, cfg.filter(checks))
 }
 
 // RunScenario executes the checks in scenario against target using the engine's

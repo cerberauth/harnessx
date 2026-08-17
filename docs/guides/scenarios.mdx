@@ -7,6 +7,8 @@ sidebar:
 
 A `Scenario` groups a named set of checks into a single runnable unit. Use `RunScenario` when you want to run a focused subset of checks — for instance, a REST API scan vs a GraphQL API scan — without registering them all on one engine and running everything.
 
+For a lighter-weight need — skip or isolate a few checks from the engine's existing registered set for one call — use `WithOnly`/`WithExclude` on `Run` instead; see [Selecting checks for a run](/concepts#selecting-checks-for-a-run). Reach for `Scenario` when the subset needs its own dependency graph or gets reused across many runs.
+
 ## Defining a Scenario
 
 A `Scenario` is a plain value type, like `Check` and `Target`:
