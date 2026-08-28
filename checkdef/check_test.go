@@ -28,6 +28,13 @@ func TestNewCheck(t *testing.T) {
 	if check.Link != def.Link {
 		t.Errorf("Link: want %q, got %q", def.Link, check.Link)
 	}
+	if check.CVSSVector != def.CVSSVector || check.CVSSScore != def.CVSSScore {
+		t.Errorf("CVSS: want %q/%v, got %q/%v", def.CVSSVector, def.CVSSScore, check.CVSSVector, check.CVSSScore)
+	}
+	if check.CWEID != def.CWEID || check.CAPECID != def.CAPECID || check.OWASP != def.OWASP {
+		t.Errorf("CWE/CAPEC/OWASP: want %q/%q/%q, got %q/%q/%q",
+			def.CWEID, def.CAPECID, def.OWASP, check.CWEID, check.CAPECID, check.OWASP)
+	}
 	if len(check.DependsOn) != len(def.DependsOn) {
 		t.Fatalf("DependsOn: want %d entries, got %d", len(def.DependsOn), len(check.DependsOn))
 	}

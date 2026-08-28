@@ -221,6 +221,20 @@ summary, err := engine.Run(ctx, target, harnessx.WithExclude("slow-check"))
 
 If an ID is in both `WithOnly` and `WithExclude`, exclusion wins. Use `Scenario` instead when the subset needs its own dependency graph or reuse across many runs; use `RunOption` for a quick, one-off include/exclude against checks already registered on the engine.
 
+### Selecting by security metadata
+
+A `Check` carries `CVSSVector`, `CVSSScore`, `CWEID`, `CAPECID`, and `OWASP` (filled in automatically when the check is built from a `checkdef.CheckDef`). Metadata `RunOption`s filter a run by those fields:
+
+```go
+summary, err := engine.Run(ctx, target, harnessx.WithMinCVSSScore(9.0))
+summary, err := engine.Run(ctx, target, harnessx.WithOWASP("API2:2023"), harnessx.WithCWEID("CWE-287"))
+summary, err := engine.Run(ctx, target, harnessx.WithFilter(func(c harnessx.Check) bool { return c.CAPECID == "CAPEC-31" }))
+```
+
+`WithFilter`, `WithMinCVSSScore`, `WithMaxCVSSScore`, `WithCVSSScoreRange`, `WithCVSSVector`, `WithCWEID`, `WithCAPECID`, and `WithOWASP` are AND-combined with each other and with `WithOnly`. Unlike `WithExclude`, a metadata filter never drops a dependency: if a selected check depends on one that doesn't match the filter, that dependency is added back so the graph stays valid.
+
+See the [Check Selection guide](/guides/check-selection) for the full table and dependency behavior.
+
 ## Conditions
 
 Conditions allow you to skip checks based on prior results.
