@@ -121,6 +121,15 @@ type Check struct {
 	DependsOn   []CheckID
 	Conditions  []Condition
 
+	// Security metadata, mirrored from checkdef.CheckDef. Purely
+	// descriptive — the engine only reads these for run-time check
+	// selection (see WithMinCVSSScore, WithCWEID, WithOWASP, ...).
+	CVSSVector string
+	CVSSScore  float64
+	CWEID      string
+	CAPECID    string
+	OWASP      string
+
 	Skip SkipDecision
 
 	Scope       CheckScope

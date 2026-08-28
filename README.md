@@ -423,6 +423,36 @@ summary, err := engine.Run(ctx, target, harnessx.WithExclude("slow-check"))
 
 `WithExclude` wins over `WithOnly` when both are passed and an ID appears in each.
 
+#### Selecting by security metadata
+
+Checks carry `CVSSVector`, `CVSSScore`, `CWEID`, `CAPECID`, and `OWASP` fields
+(populated automatically when a check is built from a `checkdef.CheckDef`). The
+metadata `RunOption`s narrow a run by those fields instead of by ID:
+
+```go
+// Critical findings only this run.
+summary, err := engine.Run(ctx, target, harnessx.WithMinCVSSScore(9.0))
+
+// Only checks mapped to specific OWASP API categories / CWEs.
+summary, err := engine.Run(ctx, target,
+    harnessx.WithOWASP("API2:2023", "API3:2023"),
+    harnessx.WithCWEID("CWE-287"),
+)
+
+// Arbitrary predicate.
+summary, err := engine.Run(ctx, target, harnessx.WithFilter(func(c harnessx.Check) bool {
+    return strings.HasPrefix(c.CAPECID, "CAPEC-1")
+}))
+```
+
+Available: `WithFilter`, `WithMinCVSSScore`, `WithMaxCVSSScore`,
+`WithCVSSScoreRange`, `WithCVSSVector`, `WithCWEID`, `WithCAPECID`, `WithOWASP`.
+They are AND-combined with each other and with `WithOnly`; `WithCWEID` /
+`WithCAPECID` / `WithOWASP` match case-insensitively against any of the values
+passed. **Dependencies are never dropped by a metadata filter** — when a
+selected check `DependsOn` a check that doesn't match, that dependency is pulled
+back in so the graph stays valid. Only `WithExclude` removes a dependency.
+
 ### Reporter
 
 Implement the `Reporter` interface to receive real-time events:

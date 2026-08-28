@@ -1,0 +1,93 @@
+---
+title: Check Selection
+description: Narrow a single run to a subset of registered checks, by ID or by security metadata
+sidebar:
+  order: 10
+---
+
+## Overview
+
+`RunOption`s passed to `Engine.Run` restrict that one call to a subset of the
+engine's registered checks. Registration is untouched — the next `Run` with no
+options runs everything again.
+
+The dependency graph is still built from the checks that survive filtering, so
+the selected set must be self-contained. ID filters (`WithOnly` / `WithExclude`)
+leave that to you; the metadata filters pull missing dependencies back in
+automatically.
+
+## By ID
+
+```go
+// Only these checks this run.
+summary, err := engine.Run(ctx, target, harnessx.WithOnly("auth-check", "schema-check"))
+
+// Everything except these.
+summary, err := engine.Run(ctx, target, harnessx.WithExclude("slow-check"))
+```
+
+`WithExclude` wins over `WithOnly` when an ID appears in both. Dropping a check
+that another selected check `DependsOn` fails the run with `ErrUnknownDependency`.
+
+## By security metadata
+
+Every `Check` carries `CVSSVector`, `CVSSScore`, `CWEID`, `CAPECID`, and `OWASP`.
+When a check is built from a `checkdef.CheckDef` these are populated from the
+definition file; otherwise set them on the `Check` literal.
+
+| Option | Keeps checks where |
+| --- | --- |
+| `WithMinCVSSScore(min)` | `CVSSScore >= min` |
+| `WithMaxCVSSScore(max)` | `CVSSScore <= max` |
+| `WithCVSSScoreRange(min, max)` | `min <= CVSSScore <= max` |
+| `WithCVSSVector(v...)` | `CVSSVector` exactly equals one of `v` |
+| `WithCWEID(id...)` | `CWEID` equals one of `id` (case-insensitive) |
+| `WithCAPECID(id...)` | `CAPECID` equals one of `id` (case-insensitive) |
+| `WithOWASP(id...)` | `OWASP` equals one of `id` (case-insensitive) |
+| `WithFilter(fn)` | `fn(check)` returns true |
+
+```go
+// Critical-only sweep.
+summary, err := engine.Run(ctx, target, harnessx.WithMinCVSSScore(9.0))
+
+// Checks mapped to a given OWASP API category or CWE.
+summary, err := engine.Run(ctx, target,
+    harnessx.WithOWASP("API2:2023"),
+    harnessx.WithCWEID("CWE-287", "CWE-345"),
+)
+
+// Anything else, via a predicate.
+summary, err := engine.Run(ctx, target, harnessx.WithFilter(func(c harnessx.Check) bool {
+    return strings.HasPrefix(c.CAPECID, "CAPEC-1")
+}))
+```
+
+## Combining options and dependencies
+
+All filters are **AND-combined** — with each other and with `WithOnly`. A check
+runs only if it passes every one.
+
+Dependencies are the exception. When a check survives the filter but
+`DependsOn` a check that does not, that dependency is added back so the graph
+stays valid — it executes, but its own observations still count. Only
+`WithExclude` removes a dependency; an explicitly excluded ID is never pulled
+back in.
+
+```go
+// "token-replay" (CVSS 9.1) depends on "discover-endpoints" (no score).
+// discover-endpoints runs too, even though it fails WithMinCVSSScore.
+summary, err := engine.Run(ctx, target, harnessx.WithMinCVSSScore(9.0))
+
+// ...unless you exclude it explicitly, which then fails the run if
+// token-replay still needs it.
+summary, err := engine.Run(ctx, target,
+    harnessx.WithMinCVSSScore(9.0),
+    harnessx.WithExclude("discover-endpoints"),
+)
+```
+
+## Choosing between RunOption and Scenario
+
+Use a `Scenario` when the subset needs its own dependency wiring or gets reused
+across many runs. Use `RunOption`s for a quick, one-off narrowing of checks
+already registered on the engine.

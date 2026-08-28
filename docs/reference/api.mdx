@@ -253,6 +253,15 @@ type Check struct {
   Timeout     time.Duration
   DependsOn   []CheckID
   Condition   Condition
+
+  // Security metadata, mirrored from checkdef.CheckDef. Descriptive only;
+  // read by the engine for run-time check selection (WithMinCVSSScore, ...).
+  CVSSVector string
+  CVSSScore  float64
+  CWEID      string
+  CAPECID    string
+  OWASP      string
+
   Run         func(context.Context, Target) (Result, error)
   RunResource func(context.Context, Target, Resource) (Result, error)
 
@@ -270,6 +279,7 @@ type Check struct {
 - `Timeout`: Max execution time (optional, no timeout if 0)
 - `DependsOn`: List of check IDs this depends on (optional)
 - `Condition`: Skip condition (optional)
+- `CVSSVector` / `CVSSScore` / `CWEID` / `CAPECID` / `OWASP`: security metadata (optional), populated automatically when the check is built from a `CheckDef`; used by the metadata `RunOption`s below
 - `Run`: Function to run for global checks (required if `Scope == ScopeGlobal` and `Variants` is empty)
 - `RunResource`: Function to run for per-resource checks (required if `Scope == ScopePerResource` and `Variants` is empty)
 - `Variants`: Attempt variants of the same check (e.g. `alg: none` casings); when set, `RunVariant`/`RunResourceVariant` is used instead of `Run`/`RunResource`
@@ -514,10 +524,41 @@ func WithOnly(ids ...CheckID) RunOption
 
 ### WithExclude
 
-Removes the given check IDs from a `Run` call. Wins over `WithOnly` if an ID appears in both.
+Removes the given check IDs from a `Run` call. Wins over `WithOnly` if an ID appears in both — including over the dependency pull-in of the metadata filters below.
 
 ```go
 func WithExclude(ids ...CheckID) RunOption
+```
+
+### Metadata filters
+
+Select checks by their security metadata instead of by ID. All of these are
+AND-combined with each other and with `WithOnly`. A check that a selected
+check `DependsOn` is kept even when it fails the filter, so the dependency
+graph stays valid; only `WithExclude` drops a dependency.
+
+```go
+func WithFilter(keep func(Check) bool) RunOption // arbitrary predicate
+
+func WithMinCVSSScore(min float64) RunOption      // CVSSScore >= min
+func WithMaxCVSSScore(max float64) RunOption      // CVSSScore <= max
+func WithCVSSScoreRange(min, max float64) RunOption
+
+func WithCVSSVector(vectors ...string) RunOption  // exact match, any of
+func WithCWEID(ids ...string) RunOption           // case-insensitive, any of
+func WithCAPECID(ids ...string) RunOption         // case-insensitive, any of
+func WithOWASP(ids ...string) RunOption           // case-insensitive, any of
+```
+
+```go
+// Critical-only sweep, dependencies pulled in automatically.
+summary, err := engine.Run(ctx, target, harnessx.WithMinCVSSScore(9.0))
+
+// Everything mapped to a specific OWASP API category or CWE.
+summary, err := engine.Run(ctx, target,
+    harnessx.WithOWASP("API2:2023"),
+    harnessx.WithCWEID("CWE-287", "CWE-345"),
+)
 ```
 
 ## Options
