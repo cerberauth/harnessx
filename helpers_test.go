@@ -3,6 +3,7 @@ package harnessx
 import "testing"
 
 const testHello = "hello"
+const testHost = "example.com"
 
 func TestDataResult_SetsDataOnly(t *testing.T) {
 	r := DataResult(42)

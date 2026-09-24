@@ -48,7 +48,7 @@ func (r *testReporter) getSummary() *ScanSummary {
 	return r.summary
 }
 
-var testTarget = Target{URL: "http://example.com", Host: "example.com"}
+var testTarget = Target{URL: "http://example.com", Host: testHost}
 
 // ── Integration Test 1: Dependency + skip flow ────────────────────────────────
 

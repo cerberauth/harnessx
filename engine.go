@@ -98,6 +98,11 @@ func (s *storeSnapshot) Resources() []Resource {
 	return s.resources
 }
 
+// Engine is safe for concurrent Run/RunScenario calls, including a
+// RunScenario issued reentrantly from inside another check's
+// Run/RunResource callback on the same engine: each call gets its own
+// resultStore and semaphores, e.checks is only read (not written) outside
+// Register, and e.cfg is immutable after New().
 type Engine struct {
 	cfg    engineConfig
 	checks []Check
@@ -144,27 +149,34 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	return e.run(ctx, target, cfg.filter(checks))
+	return e.run(ctx, target, cfg.filter(checks), nil)
 }
 
-// RunScenario executes the checks in scenario against target using the engine's
-// configured reporters, concurrency limits, and default timeout. It does not
-// consult or modify the engine's registered check list — scenario.Checks is
-// fully self-contained.
+// RunScenario executes the checks in scenario against target using the
+// engine's concurrency limits and default timeout. It does not consult or
+// modify the engine's registered check list — scenario.Checks is fully
+// self-contained.
+//
+// If scenario.Reporters is non-empty it is used instead of the engine's
+// configured reporters (see [WithReporters]), so a shared engine can give
+// each caller its own reporters.
 //
 // Reporter.OnScanComplete is always called before returning, even if
 // scenario.Checks is empty.
 func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario) (ScanSummary, error) {
 	checks := make([]Check, len(scenario.Checks))
 	copy(checks, scenario.Checks)
-	return e.run(ctx, target, checks)
+	return e.run(ctx, target, checks, scenario.Reporters)
 }
 
-func (e *Engine) run(ctx context.Context, target Target, checks []Check) (ScanSummary, error) {
+func (e *Engine) run(ctx context.Context, target Target, checks []Check, callReporters []Reporter) (ScanSummary, error) {
 	start := time.Now()
 
 	cfg := e.cfg
 	reporters := cfg.reporters
+	if len(callReporters) > 0 {
+		reporters = callReporters
+	}
 
 	summary := ScanSummary{Target: target}
 
