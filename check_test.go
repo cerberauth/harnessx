@@ -42,7 +42,7 @@ func TestSkipWhen_ReturnsEmptyWhenFalse(t *testing.T) {
 }
 
 func TestSkipWhen_ReceivesTargetAndStore(t *testing.T) {
-	target := Target{URL: "http://example.com", Host: "example.com"}
+	target := Target{URL: "http://example.com", Host: testHost}
 	store := NewStaticResultStore(Result{CheckID: testCheckID})
 
 	var gotTarget Target
