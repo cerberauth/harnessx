@@ -2,7 +2,6 @@ package harnessx
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -23,6 +22,11 @@ type Snapshot struct {
 	// Truncated reports that Body was cut at the probe's response size cap
 	// (see probe.DefaultMaxBodySize) and is not the complete response.
 	Truncated bool
+
+	// BodyHash is the SimHash of Body, set by CaptureSnapshot and
+	// ProbeAndCompareBaseline. Zero means unset; CompareSimilarity then hashes
+	// Body itself.
+	BodyHash uint64
 }
 
 // Baseline is a Snapshot held up as the expected/reference response for a resource.
@@ -74,34 +78,58 @@ func CompareStatusCode(baseline, current Snapshot) []Observation {
 	if baseline.StatusCode == current.StatusCode {
 		return nil
 	}
-	return []Observation{{
-		Title:       "Response deviates from baseline",
-		Description: fmt.Sprintf("baseline status was %d, got %d", baseline.StatusCode, current.StatusCode),
-	}}
+	return statusDeviation(baseline, current)
 }
 
-// ProbeAndCompareBaseline sends the request returned by build via
-// probe.DoResponse, keeping the response (headers, body capped at
-// probe.DefaultMaxBodySize, duration) in the Snapshot for comparators that
-// need more than the status code, with Snapshot.Truncated set when the body
-// was cut, and compares the
-// resulting snapshot against the baseline stored under baselineID. It
-// returns the current snapshot and whether the response deviated from the
-// baseline.
-func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error) {
+// CaptureSnapshot sends the request returned by build via probe.DoResponse and
+// returns the response as a Snapshot: status, headers, body (capped at
+// probe.DefaultMaxBodySize, with Truncated set when cut), duration and
+// BodyHash. It is the building block for a baseline — typically a request to
+// a random, certainly-absent path, so a catch-all "soft 404" answer can be
+// told apart from a real page with CompareSimilarity.
+func CaptureSnapshot(ctx context.Context, p *probe.Probe, build probe.RequestBuilder) (Snapshot, error) {
 	req, err := build(ctx)
 	if err != nil {
-		return Snapshot{}, false, err
+		return Snapshot{}, err
 	}
 	resp, err := probe.DoResponse(ctx, p.Client(), req)
 	if err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header,
+		Body:       resp.Body,
+		Duration:   resp.Duration,
+		Truncated:  resp.Truncated,
+		BodyHash:   SimHash(resp.Body),
+	}, nil
+}
+
+// ProbeAndCompareBaseline captures the request returned by build (see
+// CaptureSnapshot) and compares the resulting snapshot against the baseline
+// stored under baselineID. It returns the current snapshot and whether the
+// response deviated from the baseline.
+//
+// With no comparators, only a change in status code counts as a deviation
+// (CompareStatusCode). Otherwise every comparator is applied and the response
+// deviates if any of them reports an observation, so comparators compose.
+func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID, comparators ...BaselineComparator) (Snapshot, bool, error) {
+	current, err := CaptureSnapshot(ctx, p, build)
+	if err != nil {
 		return Snapshot{}, false, err
 	}
 
-	current := Snapshot{StatusCode: resp.StatusCode, Header: resp.Header, Body: resp.Body, Duration: resp.Duration, Truncated: resp.Truncated}
+	if len(comparators) == 0 {
+		comparators = []BaselineComparator{CompareStatusCode}
+	}
 	baseline, _ := GetData[Snapshot](store, baselineID)
-	vulnerable := len(CompareStatusCode(baseline, current)) > 0
-	return current, vulnerable, nil
+	for _, compare := range comparators {
+		if len(compare(baseline, current)) > 0 {
+			return current, true, nil
+		}
+	}
+	return current, false, nil
 }
 
 // BaselineCheckConfig configures a baseline-comparison check built by NewBaselineCheck.
