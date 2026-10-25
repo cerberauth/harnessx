@@ -3,6 +3,7 @@ package harnessx
 import (
 	"context"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -113,7 +114,7 @@ func softServer() *httptest.Server {
 			_, _ = fmt.Fprint(w, realPage)
 			return
 		}
-		_, _ = fmt.Fprintf(w, softNotFoundPage, r.URL.Path)
+		_, _ = fmt.Fprintf(w, softNotFoundPage, html.EscapeString(r.URL.Path))
 	}))
 }
 
