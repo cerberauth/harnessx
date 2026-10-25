@@ -16,7 +16,7 @@ const (
 	variantBad   = "bad"
 )
 
-// ── Unit tests: runVariants / runVariantAttempt / aggregateAttempts ───────────
+// ── Unit tests: RunVariants / runVariantAttempt / aggregateAttempts ───────────
 
 func TestRunVariants_SequentialByDefault_PreservesOrder(t *testing.T) {
 	var mu sync.Mutex
@@ -29,7 +29,7 @@ func TestRunVariants_SequentialByDefault_PreservesOrder(t *testing.T) {
 		return Result{}, nil
 	}
 
-	runVariants(context.Background(), []string{variantLower, variantUpper, variantMixed}, VariantsSequential, fn)
+	RunVariants(context.Background(), []string{variantLower, variantUpper, variantMixed}, VariantsSequential, fn)
 
 	want := []string{variantLower, variantUpper, variantMixed}
 	if len(order) != len(want) {
@@ -59,7 +59,7 @@ func TestRunVariants_ParallelMode_RunsAllVariants(t *testing.T) {
 		return Result{}, nil
 	}
 
-	result := runVariants(context.Background(), variants, VariantsParallel, fn)
+	result := RunVariants(context.Background(), variants, VariantsParallel, fn)
 
 	if int(atomic.LoadInt32(&count)) != len(variants) {
 		t.Errorf("expected all %d variants to run, got %d", len(variants), count)
@@ -77,7 +77,7 @@ func TestRunVariants_AggregatesObservationsFromEachAttempt(t *testing.T) {
 		return Result{}, nil
 	}
 
-	result := runVariants(context.Background(), []string{variantLower, variantUpper, variantMixed}, VariantsSequential, fn)
+	result := RunVariants(context.Background(), []string{variantLower, variantUpper, variantMixed}, VariantsSequential, fn)
 
 	if len(result.Observations) != 1 {
 		t.Fatalf("Observations length = %d, want 1", len(result.Observations))
@@ -95,7 +95,7 @@ func TestRunVariants_ObservationVariantNotOverwrittenIfAlreadySet(t *testing.T) 
 		return Result{Observations: []Observation{{Title: "x", Variant: "custom"}}}, nil
 	}
 
-	result := runVariants(context.Background(), []string{"v1"}, VariantsSequential, fn)
+	result := RunVariants(context.Background(), []string{"v1"}, VariantsSequential, fn)
 
 	if result.Observations[0].Variant != "custom" {
 		t.Errorf("Observation.Variant = %q, want %q (should not be overwritten)", result.Observations[0].Variant, "custom")
@@ -111,7 +111,7 @@ func TestRunVariants_FirstErrorSurfacedOnAggregate(t *testing.T) {
 		return Result{}, nil
 	}
 
-	result := runVariants(context.Background(), []string{"a", "b", "c"}, VariantsSequential, fn)
+	result := RunVariants(context.Background(), []string{"a", "b", "c"}, VariantsSequential, fn)
 
 	if !errors.Is(result.Err, errBoom) {
 		t.Errorf("Result.Err = %v, want %v", result.Err, errBoom)
@@ -124,6 +124,112 @@ func TestRunVariants_FirstErrorSurfacedOnAggregate(t *testing.T) {
 	}
 }
 
+func TestRunVariants_BothModes(t *testing.T) {
+	modes := map[string]VariantMode{"sequential": VariantsSequential, "parallel": VariantsParallel}
+	variants := []string{"a", "b", "c"}
+
+	for name, mode := range modes {
+		t.Run(name+"/aggregates observations and resources from all variants", func(t *testing.T) {
+			fn := func(_ context.Context, v string) (Result, error) {
+				return Result{
+					Observations: []Observation{{Title: "obs-" + v}},
+					Resources:    []Resource{{ID: "res-" + v}},
+				}, nil
+			}
+			result := RunVariants(context.Background(), variants, mode, fn)
+
+			if result.Err != nil {
+				t.Fatalf("Err = %v, want nil", result.Err)
+			}
+			if len(result.Attempts) != 3 || len(result.Observations) != 3 || len(result.Resources) != 3 {
+				t.Fatalf("attempts/observations/resources = %d/%d/%d, want 3/3/3",
+					len(result.Attempts), len(result.Observations), len(result.Resources))
+			}
+			for i, v := range variants {
+				if result.Attempts[i].Variant != v {
+					t.Errorf("Attempts[%d].Variant = %q, want %q (list order)", i, result.Attempts[i].Variant, v)
+				}
+				if result.Observations[i].Title != "obs-"+v || result.Observations[i].Variant != v {
+					t.Errorf("Observations[%d] = %+v, want title obs-%s tagged with variant %s", i, result.Observations[i], v, v)
+				}
+				if result.Resources[i].ID != "res-"+v {
+					t.Errorf("Resources[%d] = %q, want res-%s", i, result.Resources[i].ID, v)
+				}
+			}
+		})
+
+		t.Run(name+"/first error in list order wins", func(t *testing.T) {
+			errB, errC := errors.New("b failed"), errors.New("c failed")
+			fn := func(_ context.Context, v string) (Result, error) {
+				switch v {
+				case "b":
+					time.Sleep(20 * time.Millisecond) // finish after "c" in parallel mode
+					return Result{}, errB
+				case "c":
+					return Result{}, errC
+				}
+				return Result{Observations: []Observation{{Title: "ok"}}}, nil
+			}
+			result := RunVariants(context.Background(), variants, mode, fn)
+
+			if !errors.Is(result.Err, errB) {
+				t.Errorf("Err = %v, want %v (first in variants order)", result.Err, errB)
+			}
+			if !errors.Is(result.Attempts[2].Err, errC) {
+				t.Errorf("Attempts[2].Err = %v, want %v", result.Attempts[2].Err, errC)
+			}
+			if len(result.Observations) != 1 {
+				t.Errorf("Observations = %d, want 1 from the clean attempt", len(result.Observations))
+			}
+		})
+
+		t.Run(name+"/error carried on Result is surfaced", func(t *testing.T) {
+			errRes := errors.New("result err")
+			fn := func(_ context.Context, v string) (Result, error) {
+				if v == "b" {
+					return Result{Err: errRes}, nil
+				}
+				return Result{}, nil
+			}
+			result := RunVariants(context.Background(), variants, mode, fn)
+			if !errors.Is(result.Err, errRes) {
+				t.Errorf("Err = %v, want %v", result.Err, errRes)
+			}
+		})
+
+		t.Run(name+"/panic recorded as error attempt", func(t *testing.T) {
+			fn := func(_ context.Context, v string) (Result, error) {
+				if v == "b" {
+					panic("kaboom")
+				}
+				return Result{Observations: []Observation{{Title: "ok"}}}, nil
+			}
+			result := RunVariants(context.Background(), variants, mode, fn)
+
+			var scanErr *ScanError
+			if !errors.As(result.Attempts[1].Err, &scanErr) {
+				t.Fatalf("Attempts[1].Err = %T %v, want *ScanError", result.Attempts[1].Err, result.Attempts[1].Err)
+			}
+			if !errors.As(result.Err, &scanErr) {
+				t.Errorf("Result.Err = %v, want the panic's *ScanError", result.Err)
+			}
+			if len(result.Observations) != 2 {
+				t.Errorf("Observations = %d, want 2 (other variants unaffected)", len(result.Observations))
+			}
+		})
+	}
+}
+
+func TestRunVariants_NoVariants(t *testing.T) {
+	result := RunVariants(context.Background(), nil, VariantsSequential, func(context.Context, string) (Result, error) {
+		t.Fatal("fn must not be called")
+		return Result{}, nil
+	})
+	if result.Err != nil || len(result.Attempts) != 0 || len(result.Observations) != 0 {
+		t.Errorf("result = %+v, want empty", result)
+	}
+}
+
 func TestRunVariantAttempt_PanicIsRecoveredAndIsolated(t *testing.T) {
 	fn := func(_ context.Context, variant string) (Result, error) {
 		if variant == variantBad {
@@ -132,7 +238,7 @@ func TestRunVariantAttempt_PanicIsRecoveredAndIsolated(t *testing.T) {
 		return Result{Observations: []Observation{{Title: "ok"}}}, nil
 	}
 
-	result := runVariants(context.Background(), []string{"good", variantBad, "good2"}, VariantsSequential, fn)
+	result := RunVariants(context.Background(), []string{"good", variantBad, "good2"}, VariantsSequential, fn)
 
 	if result.Err == nil {
 		t.Fatal("expected aggregate Err to be set from the panicking attempt")

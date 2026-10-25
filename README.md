@@ -259,6 +259,7 @@ algNone := harnessx.Check{
 - `Observation.Variant` is auto-filled with the variant name when a variant's run function leaves it empty, so downstream reporters and the `Result.Observations` slice know which variant produced each finding.
 - A panic in one variant is recovered and recorded on that variant's `Attempt.Err` — it does not abort the other variants.
 - `ScopePerResource` checks use `RunResourceVariant` instead of `RunVariant`, and run every variant against every resource.
+- Code outside the engine — a wrapper that fans a variant check out per resource, say — can call `harnessx.RunVariants(ctx, variants, mode, fn)` to get exactly this fan-out and merge. `Result.Err` is the first failing variant in list order (deterministic even in parallel mode), observations and resources are concatenated in list order, and a panicking variant becomes a `*ScanError` on its `Attempt`.
 
 ```go
 type VariantCheckFunc func(ctx context.Context, target Target, variant string, store ResultStore) (Result, error)
@@ -733,6 +734,10 @@ const (
     VariantsSequential VariantMode = iota // default: variants run one at a time, in order
     VariantsParallel                      // variants run concurrently
 )
+
+// RunVariants calls fn once per variant and merges the outcomes into one
+// Result, exactly as the engine does for a check with Variants.
+func RunVariants(ctx context.Context, variants []string, mode VariantMode, fn func(context.Context, string) (Result, error)) Result
 
 // Attempt records the outcome of a single variant run.
 type Attempt struct {

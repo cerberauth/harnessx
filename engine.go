@@ -292,7 +292,7 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 					var result Result
 					if len(chk.Variants) > 0 {
 						result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
-							return runVariants(checkCtx, chk.Variants, chk.VariantMode, func(vctx context.Context, variant string) (Result, error) {
+							return RunVariants(checkCtx, chk.Variants, chk.VariantMode, func(vctx context.Context, variant string) (Result, error) {
 								return chk.RunVariant(vctx, target, variant, snapshot)
 							}), nil
 						})
@@ -375,7 +375,7 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 						var result Result
 						if len(chk.Variants) > 0 {
 							result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
-								return runVariants(checkCtx, chk.Variants, chk.VariantMode, func(vctx context.Context, variant string) (Result, error) {
+								return RunVariants(checkCtx, chk.Variants, chk.VariantMode, func(vctx context.Context, variant string) (Result, error) {
 									return chk.RunResourceVariant(vctx, target, res, variant, snapshot)
 								}), nil
 							})

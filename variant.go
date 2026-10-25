@@ -7,7 +7,29 @@ import (
 	"time"
 )
 
-func runVariants(ctx context.Context, variants []string, mode VariantMode, fn func(context.Context, string) (Result, error)) Result {
+// RunVariants calls fn once per entry in variants and merges the outcomes into
+// a single Result, the same way the engine does for a check with Variants. It
+// lets code that wraps variant checks outside the engine reuse that fan-out
+// instead of reimplementing it.
+//
+// mode selects the schedule: VariantsSequential (the zero value) runs them one
+// at a time in list order, VariantsParallel runs them concurrently. Either way
+// every variant runs; one failing does not stop the others.
+//
+// Aggregation:
+//   - Result.Attempts holds one Attempt per variant, in the order of variants,
+//     with its Variant, Observations, Resources, Data, Duration and Err.
+//   - Result.Observations and Result.Resources are the attempts' slices
+//     concatenated in that same order. An Observation with an empty Variant
+//     gets the name of the variant that produced it.
+//   - Result.Err is the first non-nil attempt error in variants order, not
+//     completion order, so it is deterministic in parallel mode too. An
+//     attempt's error is fn's returned error, or else the Err on its Result.
+//   - A panic in fn is recovered and recorded as that attempt's Err, a
+//     *ScanError, leaving the other variants unaffected.
+//
+// Result.Data is not set: each attempt's Data stays on its own Attempt.
+func RunVariants(ctx context.Context, variants []string, mode VariantMode, fn func(context.Context, string) (Result, error)) Result {
 	attempts := make([]Attempt, len(variants))
 
 	if mode == VariantsParallel {
