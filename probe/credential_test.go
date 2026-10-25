@@ -2,6 +2,10 @@ package probe
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -224,5 +228,238 @@ func TestNewCredentialRequest_InvalidTarget_ReturnsError(t *testing.T) {
 	_, err := NewCredentialRequest(context.Background(), "://bad-url", testCredentialValue, CredentialLocation{})
 	if err == nil {
 		t.Error("expected error, got nil")
+	}
+}
+
+const (
+	applyBaseURL    = "http://example.com/items?page=2"
+	applyBaseBody   = `{"name":"widget"}`
+	applyTraceName  = "X-Trace"
+	applyTraceValue = "trace-1"
+	applyOldAuth    = "Basic b2xkOm9sZA=="
+	applySession    = "session"
+)
+
+// newApplyBase returns a POST with a JSON body, query, header and cookie, so
+// every placement can be checked against what the caller already set.
+func newApplyBase(t *testing.T) *http.Request {
+	t.Helper()
+	req, err := NewRequest(context.Background(), http.MethodPost, applyBaseURL, strings.NewReader(applyBaseBody),
+		WithHeader("Content-Type", "application/json"),
+		WithHeader(applyTraceName, applyTraceValue),
+		WithHeader(headerAuthorization, applyOldAuth),
+		WithAuthCookie("pref", "dark"),
+	)
+	if err != nil {
+		t.Fatalf("building base request: %v", err)
+	}
+	return req
+}
+
+func readBody(t *testing.T, req *http.Request) string {
+	t.Helper()
+	b, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+	return string(b)
+}
+
+// assertBaseUntouched checks that ApplyCredential left the caller's request as built.
+func assertBaseUntouched(t *testing.T, base *http.Request) {
+	t.Helper()
+	if base.Method != http.MethodPost {
+		t.Errorf("base Method = %q, want POST", base.Method)
+	}
+	if got := base.URL.String(); got != applyBaseURL {
+		t.Errorf("base URL = %q, want %q", got, applyBaseURL)
+	}
+	if got := base.Header.Get(headerAuthorization); got != applyOldAuth {
+		t.Errorf("base Authorization = %q, want %q", got, applyOldAuth)
+	}
+	if _, err := base.Cookie(applySession); err == nil {
+		t.Error("base gained a session cookie")
+	}
+	if got := readBody(t, base); got != applyBaseBody {
+		t.Errorf("base body = %q, want %q", got, applyBaseBody)
+	}
+}
+
+func TestApplyCredential_HeaderKeepsMethodBodyAndOtherHeaders(t *testing.T) {
+	base := newApplyBase(t)
+	out, err := ApplyCredential(base, testCredentialValue, CredentialLocation{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if out.Method != http.MethodPost {
+		t.Errorf("Method = %q, want POST", out.Method)
+	}
+	if got := out.Header.Get(headerAuthorization); got != bearerPrefix+testCredentialValue {
+		t.Errorf("Authorization = %q, want %q (existing value replaced)", got, bearerPrefix+testCredentialValue)
+	}
+	if got := out.Header.Get(applyTraceName); got != applyTraceValue {
+		t.Errorf("%s = %q, want %q", applyTraceName, got, applyTraceValue)
+	}
+	if got := out.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := out.URL.String(); got != applyBaseURL {
+		t.Errorf("URL = %q, want %q", got, applyBaseURL)
+	}
+	if got := readBody(t, out); got != applyBaseBody {
+		t.Errorf("body = %q, want %q", got, applyBaseBody)
+	}
+	assertBaseUntouched(t, base)
+}
+
+func TestApplyCredential_CustomHeaderWithPrefix(t *testing.T) {
+	base := newApplyBase(t)
+	out, err := ApplyCredential(base, testCredentialValue, CredentialLocation{Name: "X-Api-Key", Prefix: "k-"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := out.Header.Get("X-Api-Key"); got != "k-"+testCredentialValue {
+		t.Errorf("X-Api-Key = %q, want %q", got, "k-"+testCredentialValue)
+	}
+	if got := out.Header.Get(headerAuthorization); got != applyOldAuth {
+		t.Errorf("unrelated Authorization changed to %q", got)
+	}
+	if base.Header.Get("X-Api-Key") != "" {
+		t.Error("base gained X-Api-Key")
+	}
+}
+
+func TestApplyCredential_QueryKeepsExistingParams(t *testing.T) {
+	base := newApplyBase(t)
+	out, err := ApplyCredential(base, testCredentialValue, CredentialLocation{In: CredentialLocationQuery, Name: "access_token"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	q := out.URL.Query()
+	if q.Get("access_token") != testCredentialValue || q.Get("page") != "2" {
+		t.Errorf("query = %v, want access_token and page=2", q)
+	}
+	if out.Method != http.MethodPost {
+		t.Errorf("Method = %q, want POST", out.Method)
+	}
+	if got := readBody(t, out); got != applyBaseBody {
+		t.Errorf("body = %q, want %q", got, applyBaseBody)
+	}
+	assertBaseUntouched(t, base)
+}
+
+func TestApplyCredential_CookieKeepsExistingCookies(t *testing.T) {
+	base := newApplyBase(t)
+	out, err := ApplyCredential(base, testCredentialValue, CredentialLocation{In: CredentialLocationCookie, Name: applySession})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if c, err := out.Cookie(applySession); err != nil || c.Value != testCredentialValue {
+		t.Errorf("session cookie = %v, %v; want value %q", c, err, testCredentialValue)
+	}
+	if c, err := out.Cookie("pref"); err != nil || c.Value != "dark" {
+		t.Errorf("existing pref cookie = %v, %v; want dark", c, err)
+	}
+	if got := readBody(t, out); got != applyBaseBody {
+		t.Errorf("body = %q, want %q", got, applyBaseBody)
+	}
+	assertBaseUntouched(t, base)
+}
+
+func TestApplyCredential_BodyReplacesBodyWithFormAndSwitchesToPost(t *testing.T) {
+	base := newApplyBase(t)
+	base.Method = http.MethodPut
+	out, err := ApplyCredential(base, testCredentialValue, CredentialLocation{In: CredentialLocationBody, Name: testFormFieldName})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if out.Method != http.MethodPost {
+		t.Errorf("Method = %q, want POST", out.Method)
+	}
+	if got := out.Header.Get("Content-Type"); got != contentTypeForm {
+		t.Errorf("Content-Type = %q, want %q", got, contentTypeForm)
+	}
+	if got := readBody(t, out); got != testFormFieldName+"="+testCredentialValue {
+		t.Errorf("body = %q, want the form field only", got)
+	}
+	if base.Method != http.MethodPut {
+		t.Errorf("base Method = %q, want PUT", base.Method)
+	}
+	if got := readBody(t, base); got != applyBaseBody {
+		t.Errorf("base body = %q, want %q", got, applyBaseBody)
+	}
+}
+
+func TestApplyCredential_ResultBodyIsReplayable(t *testing.T) {
+	base := newApplyBase(t)
+	out, err := ApplyCredential(base, testCredentialValue, CredentialLocation{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = readBody(t, out) // consume it once
+
+	again, err := out.GetBody()
+	if err != nil {
+		t.Fatalf("GetBody: %v", err)
+	}
+	if b, _ := io.ReadAll(again); string(b) != applyBaseBody {
+		t.Errorf("replayed body = %q, want %q", b, applyBaseBody)
+	}
+}
+
+func TestApplyCredential_BodyWithoutGetBodyIsBufferedAndRestored(t *testing.T) {
+	base, err := http.NewRequest(http.MethodPost, applyBaseURL, io.NopCloser(strings.NewReader(applyBaseBody)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.GetBody != nil {
+		t.Fatal("test setup: expected a request without GetBody")
+	}
+
+	out, err := ApplyCredential(base, testCredentialValue, CredentialLocation{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := readBody(t, out); got != applyBaseBody {
+		t.Errorf("out body = %q, want %q", got, applyBaseBody)
+	}
+	if got := readBody(t, base); got != applyBaseBody {
+		t.Errorf("base body = %q after ApplyCredential, want it restored", got)
+	}
+	if out.GetBody == nil {
+		t.Error("out.GetBody = nil, want replayable")
+	}
+}
+
+func TestApplyCredential_NoBody(t *testing.T) {
+	base, _ := NewRequest(context.Background(), http.MethodGet, applyBaseURL, nil)
+	out, err := ApplyCredential(base, testCredentialValue, CredentialLocation{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Method != http.MethodGet || out.Body != nil && out.Body != http.NoBody {
+		t.Errorf("Method = %q Body = %v, want GET with no body", out.Method, out.Body)
+	}
+}
+
+func TestApplyCredential_InvalidLocation(t *testing.T) {
+	_, err := ApplyCredential(newApplyBase(t), testCredentialValue, CredentialLocation{In: "bogus"})
+	if err == nil {
+		t.Error("expected error for unknown In, got nil")
+	}
+}
+
+func TestApplyCredential_GetBodyError(t *testing.T) {
+	base := newApplyBase(t)
+	errBoom := errors.New("boom")
+	base.GetBody = func() (io.ReadCloser, error) { return nil, errBoom }
+
+	_, err := ApplyCredential(base, testCredentialValue, CredentialLocation{})
+	if !errors.Is(err, errBoom) {
+		t.Errorf("error = %v, want %v", err, errBoom)
 	}
 }
