@@ -463,6 +463,48 @@ func TestProbeAndCompareBaseline_VulnerableWhenStatusDiffersFromBaseline(t *test
 	}
 }
 
+func TestProbeAndCompareBaseline_TruncatesOversizedBody(t *testing.T) {
+	over := probe.DefaultMaxBodySize + 1024
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, over))
+	}))
+	defer srv.Close()
+
+	store := NewStaticResultStore(ResultData(testCheckIDProbe, Snapshot{StatusCode: http.StatusOK}))
+	build := func(ctx context.Context) (*http.Request, error) {
+		return probe.NewRequest(ctx, http.MethodGet, srv.URL, nil)
+	}
+	snap, _, err := ProbeAndCompareBaseline(context.Background(), probe.New(), build, store, testCheckIDProbe)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !snap.Truncated {
+		t.Error("Truncated = false, want true")
+	}
+	if len(snap.Body) != probe.DefaultMaxBodySize {
+		t.Errorf("len(Body) = %d, want %d", len(snap.Body), probe.DefaultMaxBodySize)
+	}
+}
+
+func TestProbeAndCompareBaseline_SmallBodyNotTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	store := NewStaticResultStore(ResultData(testCheckIDProbe, Snapshot{StatusCode: http.StatusOK}))
+	build := func(ctx context.Context) (*http.Request, error) {
+		return probe.NewRequest(ctx, http.MethodGet, srv.URL, nil)
+	}
+	snap, _, err := ProbeAndCompareBaseline(context.Background(), probe.New(), build, store, testCheckIDProbe)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if snap.Truncated || string(snap.Body) != "ok" {
+		t.Errorf("Truncated = %v Body = %q, want false \"ok\"", snap.Truncated, snap.Body)
+	}
+}
+
 func TestProbeAndCompareBaseline_NotVulnerableWhenStatusMatchesBaseline(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
