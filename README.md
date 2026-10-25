@@ -705,6 +705,14 @@ func WithAPIKeyQuery(name, value string) RequestMutator
 func WithAuthCookie(name, value string) RequestMutator
 func WithFormCredential(name, value string) RequestMutator
 
+// Runtime-chosen credential placement (header, cookie, query or body).
+// NewCredentialRequest builds a fresh GET carrying only the credential.
+// ApplyCredential places it on a request you already built, returning a copy that
+// keeps your method, URL, headers, cookies and body; the original is not modified.
+// loc.In == "body" replaces the body with a urlencoded form and switches to POST.
+func NewCredentialRequest(ctx context.Context, target, value string, loc CredentialLocation) (*http.Request, error)
+func ApplyCredential(req *http.Request, value string, loc CredentialLocation) (*http.Request, error)
+
 // NewRequestFromResource builds a request for r, defaulting to GET when
 // r.Method is empty.
 func NewRequestFromResource(ctx context.Context, r Resource, mutators ...probe.RequestMutator) (*http.Request, error)

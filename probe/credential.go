@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -115,10 +116,45 @@ func (l CredentialLocation) Validate() error {
 	}
 }
 
-// NewCredentialRequest builds a request against target with value placed at
-// loc. Header, cookie, and query placements produce a GET; body placement
+// NewCredentialRequest builds a GET request against target and places value at
+// loc on it via ApplyCredential, so loc is defaulted and validated the same
+// way. Header, cookie, and query placements keep the GET; body placement
 // switches to POST via WithFormCredential.
 func NewCredentialRequest(ctx context.Context, target string, value string, loc CredentialLocation) (*http.Request, error) {
+	req, err := NewRequest(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	return ApplyCredential(req, value, loc)
+}
+
+// ApplyCredential returns a copy of req with loc.Prefix+value placed at loc,
+// leaving the caller's method, URL, headers, cookies and body intact — the
+// way to inject a credential into a request the caller already built.
+//
+// loc is first completed with CredentialLocation.WithDefaults and checked with
+// CredentialLocation.Validate. The credential then goes where loc.In says:
+//   - header: the header loc.Name is set, replacing any existing value;
+//   - cookie: a cookie loc.Name is added (WithAuthCookie);
+//   - query: the query parameter loc.Name is set, replacing any existing value;
+//   - body: with the semantics of WithFormCredential — the method becomes POST
+//     and the body is replaced by a urlencoded form holding only loc.Name.
+//
+// req is never modified. The copy's body is an independent reader over the same
+// bytes (via req.GetBody), so both stay replayable. A request with a body but no
+// GetBody is buffered in memory once; req.Body is then restored to a fresh
+// reader over those bytes.
+func ApplyCredential(req *http.Request, value string, loc CredentialLocation) (*http.Request, error) {
+	loc = loc.WithDefaults()
+	if err := loc.Validate(); err != nil {
+		return nil, err
+	}
+
+	out := req.Clone(req.Context())
+	if err := cloneBody(req, out); err != nil {
+		return nil, err
+	}
+
 	value = loc.Prefix + value
 	var mutator RequestMutator
 	switch loc.In {
@@ -131,5 +167,36 @@ func NewCredentialRequest(ctx context.Context, target string, value string, loc 
 	default:
 		mutator = WithAPIKeyHeader(loc.Name, value)
 	}
-	return NewRequest(ctx, http.MethodGet, target, nil, mutator)
+	if err := mutator(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// cloneBody gives dst, a Clone of src, its own body reader. Clone shares the
+// Body reader with the original, so without this the two would consume one stream.
+func cloneBody(src, dst *http.Request) error {
+	if src.Body == nil || src.Body == http.NoBody {
+		return nil
+	}
+	if src.GetBody != nil {
+		body, err := src.GetBody()
+		if err != nil {
+			return fmt.Errorf("probe: cloning request body: %w", err)
+		}
+		dst.Body = body
+		return nil
+	}
+
+	data, err := io.ReadAll(src.Body)
+	_ = src.Body.Close()
+	if err != nil {
+		return fmt.Errorf("probe: reading request body: %w", err)
+	}
+	src.Body = io.NopCloser(bytes.NewReader(data))
+	dst.Body = io.NopCloser(bytes.NewReader(data))
+	dst.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}
+	return nil
 }
