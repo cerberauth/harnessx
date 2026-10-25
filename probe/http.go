@@ -48,7 +48,9 @@ func defaultConfig() config {
 	}
 }
 
-// WithUserAgent sets the User-Agent header sent on every request.
+// WithUserAgent sets the default User-Agent header, sent on every request that
+// does not already carry its own. A User-Agent set by the caller on the request
+// is never overridden.
 func WithUserAgent(ua string) Option {
 	return func(c *config) {
 		if ua != "" {
@@ -148,7 +150,8 @@ func (p *Probe) Client() *http.Client {
 	}
 }
 
-// RoundTrip implements http.RoundTripper. It injects the User-Agent header,
+// RoundTrip implements http.RoundTripper. It injects the default User-Agent
+// header when the request has none (a caller-set User-Agent is kept),
 // retries on 429/503 and transient network errors, and respects rate-limit
 // directives from Retry-After and X-RateLimit-Reset response headers.
 //
@@ -190,7 +193,9 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		clone := req.Clone(ctx)
-		clone.Header.Set("User-Agent", p.cfg.userAgent)
+		if clone.Header.Get("User-Agent") == "" {
+			clone.Header.Set("User-Agent", p.cfg.userAgent)
+		}
 		if bodyBytes != nil {
 			clone.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			clone.ContentLength = int64(len(bodyBytes))

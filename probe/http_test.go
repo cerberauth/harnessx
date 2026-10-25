@@ -134,6 +134,77 @@ func TestRoundTrip_UserAgentSet(t *testing.T) {
 	}
 }
 
+func TestRoundTrip_UserAgent_CallerValueWins(t *testing.T) {
+	const callerUA = "vulnapi/1.2"
+	var gotUA []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Values("User-Agent")
+	}))
+	defer srv.Close()
+
+	// Retries must keep the caller's value too, not only the first attempt.
+	var calls atomic.Int32
+	flaky := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Values("User-Agent")
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+		}
+	})
+	retrySrv := httptest.NewServer(flaky)
+	defer retrySrv.Close()
+
+	for name, url := range map[string]string{"single attempt": srv.URL, "after retry": retrySrv.URL} {
+		t.Run(name, func(t *testing.T) {
+			gotUA = nil
+			p := New(WithUserAgent("probe-default/1.0"), WithRetryDelay(1*time.Millisecond))
+			req, _ := http.NewRequest(http.MethodGet, url, nil)
+			req.Header.Set("User-Agent", callerUA)
+			resp, err := p.Client().Do(req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			_ = resp.Body.Close()
+			if len(gotUA) != 1 || gotUA[0] != callerUA {
+				t.Errorf("User-Agent = %q, want only %q", gotUA, callerUA)
+			}
+		})
+	}
+}
+
+func TestRoundTrip_UserAgent_DefaultAppliedWhenAbsent(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+	}))
+	defer srv.Close()
+
+	p := New()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	resp, err := p.Client().Do(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if gotUA != defaultUserAgent {
+		t.Errorf("User-Agent = %q, want %q", gotUA, defaultUserAgent)
+	}
+}
+
+func TestRoundTrip_UserAgent_DoesNotMutateCallerRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	resp, err := New().RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = resp.Body.Close()
+	if got := req.Header.Get("User-Agent"); got != "" {
+		t.Errorf("caller request User-Agent = %q, want it untouched", got)
+	}
+}
+
 func TestRoundTrip_AnyVerb(t *testing.T) {
 	verbs := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodHead}
 
