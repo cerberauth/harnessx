@@ -125,6 +125,12 @@ func (p *Probe) Client() *http.Client {
 // RoundTrip implements http.RoundTripper. It injects the User-Agent header,
 // retries on 429/503 and transient network errors, and respects rate-limit
 // directives from Retry-After and X-RateLimit-Reset response headers.
+//
+// It never returns both a response and an error. When the final attempt still
+// answers 429/503, that response is returned unread with a nil error so the
+// caller sees the real status and body. When the final attempt fails with a
+// network error, the returned error wraps both ErrMaxRetriesExceeded and the
+// last network error.
 func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 
@@ -134,7 +140,6 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	var lastErr error
-	var lastResp *http.Response
 
 	for attempt := 0; attempt <= p.cfg.maxRetries; attempt++ {
 		if ctx.Err() != nil {
@@ -164,14 +169,13 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			if attempt == p.cfg.maxRetries {
+				// Last attempt: hand the response to the caller unread.
+				return resp, nil
+			}
 			// Drain and close to allow connection reuse.
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			lastResp = resp
-			lastErr = fmt.Errorf("probe: HTTP %d", resp.StatusCode)
-			if attempt == p.cfg.maxRetries {
-				break
-			}
 			wait := retryAfterDuration(resp, p.cfg.retryDelay, attempt)
 			if sleepErr := sleepCtx(ctx, wait); sleepErr != nil {
 				return nil, sleepErr
@@ -182,7 +186,7 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, nil
 	}
 
-	return lastResp, fmt.Errorf("%w: %w", ErrMaxRetriesExceeded, lastErr)
+	return nil, fmt.Errorf("%w: %w", ErrMaxRetriesExceeded, lastErr)
 }
 
 // snapshotBody reads req.Body into a byte slice so it can be replayed on each

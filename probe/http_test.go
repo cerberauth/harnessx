@@ -198,26 +198,85 @@ func TestRoundTrip_Retry_503_ThenSuccess(t *testing.T) {
 	}
 }
 
-func TestRoundTrip_MaxRetriesExceeded(t *testing.T) {
-	var calls atomic.Int32
+func TestRoundTrip_RetriesExhausted_ReturnsFinalResponse(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(fmt.Sprintf("%d", status), func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, "slow down")
+			}))
+			defer srv.Close()
+
+			p := New(WithMaxRetries(2), WithRetryDelay(1*time.Millisecond))
+			req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+			resp, err := p.RoundTrip(req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != status {
+				t.Errorf("status = %d, want %d", resp.StatusCode, status)
+			}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("reading body: %v", err)
+			}
+			if string(body) != "slow down" {
+				t.Errorf("body = %q, want %q", body, "slow down")
+			}
+			// maxRetries=2 → 3 total attempts
+			if calls.Load() != 3 {
+				t.Errorf("calls = %d, want 3", calls.Load())
+			}
+		})
+	}
+}
+
+func TestRoundTrip_NeverReturnsResponseAndError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer srv.Close()
 
-	p := New(WithMaxRetries(2), WithRetryDelay(1*time.Millisecond))
-	c := p.Client()
-	_, err := c.Get(srv.URL)
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	p := New(WithMaxRetries(1), WithRetryDelay(1*time.Millisecond))
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	resp, err := p.RoundTrip(req)
+	if resp != nil && err != nil {
+		t.Fatalf("got both response (%d) and error (%v)", resp.StatusCode, err)
+	}
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+
+	srv.Close()
+	resp, err = p.RoundTrip(req.Clone(context.Background()))
+	if resp != nil && err != nil {
+		t.Fatalf("got both response and error: %v", err)
+	}
+	if resp != nil {
+		_ = resp.Body.Close()
 	}
 	if !errors.Is(err, ErrMaxRetriesExceeded) {
 		t.Errorf("error = %v, want ErrMaxRetriesExceeded", err)
 	}
-	// maxRetries=2 → 3 total attempts
-	if calls.Load() != 3 {
-		t.Errorf("calls = %d, want 3", calls.Load())
+}
+
+func TestRoundTrip_ClosedListener_ErrMaxRetriesExceeded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+
+	p := New(WithMaxRetries(1), WithRetryDelay(1*time.Millisecond))
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	resp, err := p.RoundTrip(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+		t.Fatalf("response = %v, want nil", resp.StatusCode)
+	}
+	if !errors.Is(err, ErrMaxRetriesExceeded) {
+		t.Errorf("error = %v, want ErrMaxRetriesExceeded", err)
 	}
 }
 
