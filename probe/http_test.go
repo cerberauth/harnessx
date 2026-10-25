@@ -462,7 +462,7 @@ func TestRoundTrip_NonIdempotent(t *testing.T) {
 		{"POST 429 retried", http.MethodPost, 429, "", nil, 3, 429},
 		{"PATCH 429 retried", http.MethodPatch, 429, "", nil, 3, 429},
 		{"POST 503 with opt-in retried", http.MethodPost, 503, "", []Option{WithRetryNonIdempotent()}, 3, 503},
-		{"POST 503 with Idempotency-Key retried", http.MethodPost, 503, "abc", nil, 3, 503},
+		{"POST 503 with Idempotency-Key retried", http.MethodPost, 503, "idem-key-1", nil, 3, 503},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
