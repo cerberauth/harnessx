@@ -480,7 +480,7 @@ engine := harnessx.New(
 
 Baseline comparison detects the case where an endpoint's response *changes* in a way that indicates a bug — the canonical example being an endpoint that normally answers `401 Unauthorized` but, because of a broken authorization check, answers `200 OK` instead.
 
-A `Baseline` is just a `Snapshot{StatusCode int, Header http.Header, Body []byte, Duration time.Duration, Data any}` — by default only the status code is compared, but `Header`/`Body`/`Duration` carry the full response, and `Data` can carry anything else, for custom comparators to inspect.
+A `Baseline` is just a `Snapshot{StatusCode int, Header http.Header, Body []byte, Duration time.Duration, Data any, Truncated bool}` — by default only the status code is compared, but `Header`/`Body`/`Duration` carry the full response, and `Data` can carry anything else, for custom comparators to inspect.
 
 ```go
 type Snapshot struct {
@@ -489,6 +489,7 @@ type Snapshot struct {
     Body       []byte
     Duration   time.Duration
     Data       any
+    Truncated  bool // Body was cut at probe.DefaultMaxBodySize (10 MiB)
 }
 type Baseline = Snapshot
 
@@ -540,7 +541,7 @@ _, vulnerable, err := harnessx.ProbeAndCompareBaseline(ctx, p,
     }, store, "baseline-probe")
 ```
 
-It builds the request via `probe.NewRequest` plus a named credential mutator (`WithBearerToken`, `WithBasicAuth`, `WithAPIKeyHeader`, `WithAPIKeyQuery`, `WithAuthCookie`, `WithFormCredential`), sends it via `probe.Do`, and diffs the resulting `Snapshot` against the baseline stored under `"baseline-probe"`.
+It builds the request via `probe.NewRequest` plus a named credential mutator (`WithBearerToken`, `WithBasicAuth`, `WithAPIKeyHeader`, `WithAPIKeyQuery`, `WithAuthCookie`, `WithFormCredential`), sends it via `probe.DoResponse` (response bodies are capped at 10 MiB; `Snapshot.Truncated` reports a cut body, `probe.WithMaxBodySize` changes the cap), and diffs the resulting `Snapshot` against the baseline stored under `"baseline-probe"`.
 
 See the [Baseline Comparison guide](/guides/baseline) and [`examples/baseline-scan`](./examples/baseline-scan/main.go) for a full runnable scenario.
 
@@ -598,7 +599,7 @@ func SkipResourceWhen(fn func(ctx context.Context, target Target, resource Resou
 ### Baseline Comparison
 
 ```go
-type Snapshot struct { StatusCode int; Header http.Header; Body []byte; Duration time.Duration; Data any }
+type Snapshot struct { StatusCode int; Header http.Header; Body []byte; Duration time.Duration; Data any; Truncated bool }
 type Baseline = Snapshot
 
 // BaselineSource resolves the baseline for a resource; ok=false skips the check.
@@ -672,7 +673,7 @@ func WithFormCredential(name, value string) RequestMutator
 // r.Method is empty.
 func NewRequestFromResource(ctx context.Context, r Resource, mutators ...probe.RequestMutator) (*http.Request, error)
 
-// ProbeAndCompareBaseline sends the request returned by build via probe.Do,
+// ProbeAndCompareBaseline sends the request returned by build via probe.DoResponse,
 // and compares the resulting Snapshot against the baseline stored under baselineID.
 func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error)
 ```

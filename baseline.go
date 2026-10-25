@@ -19,6 +19,10 @@ type Snapshot struct {
 	Body       []byte
 	Duration   time.Duration
 	Data       any
+
+	// Truncated reports that Body was cut at the probe's response size cap
+	// (see probe.DefaultMaxBodySize) and is not the complete response.
+	Truncated bool
 }
 
 // Baseline is a Snapshot held up as the expected/reference response for a resource.
@@ -76,9 +80,11 @@ func CompareStatusCode(baseline, current Snapshot) []Observation {
 	}}
 }
 
-// ProbeAndCompareBaseline sends the request returned by build via probe.Do,
-// keeping the full response (headers, body, duration) in the Snapshot for
-// comparators that need more than the status code, and compares the
+// ProbeAndCompareBaseline sends the request returned by build via
+// probe.DoResponse, keeping the response (headers, body capped at
+// probe.DefaultMaxBodySize, duration) in the Snapshot for comparators that
+// need more than the status code, with Snapshot.Truncated set when the body
+// was cut, and compares the
 // resulting snapshot against the baseline stored under baselineID. It
 // returns the current snapshot and whether the response deviated from the
 // baseline.
@@ -87,12 +93,12 @@ func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.Re
 	if err != nil {
 		return Snapshot{}, false, err
 	}
-	statusCode, header, body, duration, err := probe.Do(ctx, p.Client(), req)
+	resp, err := probe.DoResponse(ctx, p.Client(), req)
 	if err != nil {
 		return Snapshot{}, false, err
 	}
 
-	current := Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}
+	current := Snapshot{StatusCode: resp.StatusCode, Header: resp.Header, Body: resp.Body, Duration: resp.Duration, Truncated: resp.Truncated}
 	baseline, _ := GetData[Snapshot](store, baselineID)
 	vulnerable := len(CompareStatusCode(baseline, current)) > 0
 	return current, vulnerable, nil
