@@ -32,6 +32,8 @@ type config struct {
 	retryDelay time.Duration
 	transport  http.RoundTripper
 	timeout    time.Duration
+
+	retryNonIdempotent bool
 }
 
 func defaultConfig() config {
@@ -91,6 +93,16 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
+// WithRetryNonIdempotent allows retrying non-idempotent requests (e.g. POST,
+// PATCH) on network errors and 503 responses. By default such requests are
+// only retried on 429, since a request that was sent or processed before the
+// failure may otherwise be applied twice.
+func WithRetryNonIdempotent() Option {
+	return func(c *config) {
+		c.retryNonIdempotent = true
+	}
+}
+
 // Probe implements http.RoundTripper with retry, rate-limit compliance, and
 // User-Agent injection. Use Client() to get a standard *http.Client backed by
 // this probe, giving access to the full net/http API with no verb restrictions.
@@ -126,6 +138,11 @@ func (p *Probe) Client() *http.Client {
 // retries on 429/503 and transient network errors, and respects rate-limit
 // directives from Retry-After and X-RateLimit-Reset response headers.
 //
+// Requests with a non-idempotent method (RFC 9110 §9.2.2) are only retried on
+// 429, where the server did not process them. Network errors and 503 responses
+// are returned immediately, unless the request carries an Idempotency-Key
+// header or WithRetryNonIdempotent is set.
+//
 // It never returns both a response and an error. When the final attempt still
 // answers 429/503, that response is returned unread with a nil error so the
 // caller sees the real status and body. When the final attempt fails with a
@@ -138,6 +155,8 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	retryUnsafe := p.cfg.retryNonIdempotent || isIdempotent(req)
 
 	var lastErr error
 
@@ -158,6 +177,9 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+			if !retryUnsafe {
+				return nil, err
+			}
 			lastErr = err
 			if attempt == p.cfg.maxRetries {
 				break
@@ -168,7 +190,9 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 			continue
 		}
 
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+		retryable := resp.StatusCode == http.StatusTooManyRequests ||
+			(resp.StatusCode == http.StatusServiceUnavailable && retryUnsafe)
+		if retryable {
 			if attempt == p.cfg.maxRetries {
 				// Last attempt: hand the response to the caller unread.
 				return resp, nil
@@ -187,6 +211,16 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return nil, fmt.Errorf("%w: %w", ErrMaxRetriesExceeded, lastErr)
+}
+
+// isIdempotent reports whether req may be safely sent more than once: its
+// method is idempotent per RFC 9110 §9.2.2 or it carries an Idempotency-Key.
+func isIdempotent(req *http.Request) bool {
+	switch req.Method {
+	case "", http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
+		return true
+	}
+	return req.Header.Get("Idempotency-Key") != ""
 }
 
 // snapshotBody reads req.Body into a byte slice so it can be replayed on each

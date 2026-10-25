@@ -42,7 +42,11 @@ func TestNew_WithOptions(t *testing.T) {
 		WithRetryDelay(100*time.Millisecond),
 		WithTransport(customTransport),
 		WithTimeout(10*time.Second),
+		WithRetryNonIdempotent(),
 	)
+	if !p.cfg.retryNonIdempotent {
+		t.Error("retryNonIdempotent not set")
+	}
 	if p.cfg.userAgent != "my-agent/2.0" {
 		t.Errorf("userAgent = %q", p.cfg.userAgent)
 	}
@@ -436,6 +440,110 @@ func TestRoundTrip_BodyReplayedOnRetry(t *testing.T) {
 	for i, body := range received {
 		if body != wantBody {
 			t.Errorf("attempt %d body = %q, want %q", i, body, wantBody)
+		}
+	}
+}
+
+func TestRoundTrip_NonIdempotent(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		status     int
+		header     string
+		opts       []Option
+		wantHits   int32
+		wantStatus int
+	}{
+		{"GET 503 retried", http.MethodGet, 503, "", nil, 3, 503},
+		{"PUT 503 retried", http.MethodPut, 503, "", nil, 3, 503},
+		{"DELETE 503 retried", http.MethodDelete, 503, "", nil, 3, 503},
+		{"POST 503 not retried", http.MethodPost, 503, "", nil, 1, 503},
+		{"PATCH 503 not retried", http.MethodPatch, 503, "", nil, 1, 503},
+		{"POST 429 retried", http.MethodPost, 429, "", nil, 3, 429},
+		{"PATCH 429 retried", http.MethodPatch, 429, "", nil, 3, 429},
+		{"POST 503 with opt-in retried", http.MethodPost, 503, "", []Option{WithRetryNonIdempotent()}, 3, 503},
+		{"POST 503 with Idempotency-Key retried", http.MethodPost, 503, "abc", nil, 3, 503},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var hits atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+
+			opts := append([]Option{WithMaxRetries(2), WithRetryDelay(1 * time.Millisecond)}, tt.opts...)
+			p := New(opts...)
+			req, _ := http.NewRequest(tt.method, srv.URL, strings.NewReader("x"))
+			if tt.header != "" {
+				req.Header.Set("Idempotency-Key", tt.header)
+			}
+			resp, err := p.RoundTrip(req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != tt.wantStatus {
+				t.Errorf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+			if hits.Load() != tt.wantHits {
+				t.Errorf("hits = %d, want %d", hits.Load(), tt.wantHits)
+			}
+		})
+	}
+}
+
+func TestRoundTrip_NonIdempotent_NetworkError(t *testing.T) {
+	tests := []struct {
+		name     string
+		method   string
+		opts     []Option
+		wantHits int32
+	}{
+		{"GET retried", http.MethodGet, nil, 2},
+		{"POST not retried", http.MethodPost, nil, 1},
+		{"POST with opt-in retried", http.MethodPost, []Option{WithRetryNonIdempotent()}, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var hits atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+			}))
+			defer srv.Close()
+
+			opts := append([]Option{WithMaxRetries(1), WithRetryDelay(1 * time.Millisecond)}, tt.opts...)
+			p := New(opts...)
+			req, _ := http.NewRequest(tt.method, srv.URL, strings.NewReader("x"))
+			resp, err := p.RoundTrip(req)
+			if resp != nil {
+				_ = resp.Body.Close()
+				t.Fatalf("response = %d, want nil", resp.StatusCode)
+			}
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if hits.Load() != tt.wantHits {
+				t.Errorf("hits = %d, want %d", hits.Load(), tt.wantHits)
+			}
+		})
+	}
+}
+
+func TestIsIdempotent(t *testing.T) {
+	for method, want := range map[string]bool{
+		"": true, http.MethodGet: true, http.MethodHead: true, http.MethodOptions: true,
+		http.MethodTrace: true, http.MethodPut: true, http.MethodDelete: true,
+		http.MethodPost: false, http.MethodPatch: false, http.MethodConnect: false,
+	} {
+		req, _ := http.NewRequest(method, "http://example.com", nil)
+		if got := isIdempotent(req); got != want {
+			t.Errorf("%q: isIdempotent = %v, want %v", method, got, want)
 		}
 	}
 }
