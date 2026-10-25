@@ -3,6 +3,7 @@ package harnessx
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 )
 
@@ -263,5 +264,63 @@ func TestRunScenario_ReporterCallbacks(t *testing.T) {
 	}
 	if rep.summary == nil {
 		t.Error("OnScanComplete not called")
+	}
+}
+
+func TestRunScenario_RunOptionsNarrowChecks(t *testing.T) {
+	var mu sync.Mutex
+	ran := map[CheckID]bool{}
+	mk := func(id CheckID, deps ...CheckID) Check {
+		return Check{
+			ID:        id,
+			Scope:     ScopeGlobal,
+			DependsOn: deps,
+			Run: func(context.Context, Target, ResultStore) (Result, error) {
+				mu.Lock()
+				ran[id] = true
+				mu.Unlock()
+				return Result{}, nil
+			},
+		}
+	}
+	scenario := Scenario{Checks: []Check{mk("dep"), mk("x", "dep"), mk("y", "dep")}}
+
+	rep := &testReporter{}
+	engine := New(WithReporters(rep))
+	summary, err := engine.RunScenario(context.Background(), testTarget, scenario, WithExclude("x"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ran["x"] {
+		t.Error("excluded check x ran")
+	}
+	if !ran["dep"] || !ran["y"] {
+		t.Errorf("ran = %v, want dep and y to run", ran)
+	}
+	if summary.TotalChecks != 2 || rep.totalChecks != 2 {
+		t.Errorf("TotalChecks = %d, OnScanStart total = %d, want 2 (after filtering)", summary.TotalChecks, rep.totalChecks)
+	}
+}
+
+func TestRunScenario_OnlyPullsInDependencies(t *testing.T) {
+	scenario := Scenario{Checks: metaChecks()}
+	engine := New()
+	summary, err := engine.RunScenario(context.Background(), testTarget, scenario, WithOnly("high-with-dep"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.TotalChecks != 2 {
+		t.Errorf("TotalChecks = %d, want 2 (high-with-dep + dep)", summary.TotalChecks)
+	}
+}
+
+func TestRunScenario_NoOptionsRunsAll(t *testing.T) {
+	engine := New()
+	summary, err := engine.RunScenario(context.Background(), testTarget, Scenario{Checks: metaChecks()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.TotalChecks != 4 {
+		t.Errorf("TotalChecks = %d, want 4", summary.TotalChecks)
 	}
 }
