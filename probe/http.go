@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -34,6 +36,7 @@ type config struct {
 	timeout    time.Duration
 
 	retryNonIdempotent bool
+	limiter            *rate.Limiter
 }
 
 func defaultConfig() config {
@@ -103,6 +106,17 @@ func WithRetryNonIdempotent() Option {
 	}
 }
 
+// WithRateLimiter makes the probe wait on l before every attempt, retries
+// included. A nil limiter (the default) means no limit.
+//
+// A limiter is safe for concurrent use, so sharing one across several Probes
+// enforces a single global rate over all of them.
+func WithRateLimiter(l *rate.Limiter) Option {
+	return func(c *config) {
+		c.limiter = l
+	}
+}
+
 // Probe implements http.RoundTripper with retry, rate-limit compliance, and
 // User-Agent injection. Use Client() to get a standard *http.Client backed by
 // this probe, giving access to the full net/http API with no verb restrictions.
@@ -138,6 +152,10 @@ func (p *Probe) Client() *http.Client {
 // retries on 429/503 and transient network errors, and respects rate-limit
 // directives from Retry-After and X-RateLimit-Reset response headers.
 //
+// If a rate limiter is configured (see WithRateLimiter), RoundTrip waits for
+// a token before every attempt, retries included. A failed wait, such as a
+// cancelled context, is returned as the error.
+//
 // Requests with a non-idempotent method (RFC 9110 §9.2.2) are only retried on
 // 429, where the server did not process them. Network errors and 503 responses
 // are returned immediately, unless the request carries an Idempotency-Key
@@ -163,6 +181,12 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 	for attempt := 0; attempt <= p.cfg.maxRetries; attempt++ {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+
+		if p.cfg.limiter != nil {
+			if err := p.cfg.limiter.Wait(ctx); err != nil {
+				return nil, err
+			}
 		}
 
 		clone := req.Clone(ctx)

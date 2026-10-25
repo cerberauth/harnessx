@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // --- Constructor / config tests ---
@@ -36,6 +38,7 @@ func TestNew_Defaults(t *testing.T) {
 
 func TestNew_WithOptions(t *testing.T) {
 	customTransport := &http.Transport{}
+	lim := rate.NewLimiter(rate.Limit(1), 1)
 	p := New(
 		WithUserAgent("my-agent/2.0"),
 		WithMaxRetries(5),
@@ -43,7 +46,11 @@ func TestNew_WithOptions(t *testing.T) {
 		WithTransport(customTransport),
 		WithTimeout(10*time.Second),
 		WithRetryNonIdempotent(),
+		WithRateLimiter(lim),
 	)
+	if p.cfg.limiter != lim {
+		t.Error("limiter not set")
+	}
 	if !p.cfg.retryNonIdempotent {
 		t.Error("retryNonIdempotent not set")
 	}
@@ -545,6 +552,94 @@ func TestIsIdempotent(t *testing.T) {
 		if got := isIdempotent(req); got != want {
 			t.Errorf("%q: isIdempotent = %v, want %v", method, got, want)
 		}
+	}
+}
+
+func TestRoundTrip_RateLimiter_Paces(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+	}))
+	defer srv.Close()
+
+	p := New(WithRateLimiter(rate.NewLimiter(rate.Every(100*time.Millisecond), 1)))
+	start := time.Now()
+	for range 5 {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+		resp, err := p.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		_ = resp.Body.Close()
+	}
+	// First request uses the burst token; the other four wait 100ms each.
+	if elapsed := time.Since(start); elapsed < 390*time.Millisecond {
+		t.Errorf("5 requests took %v, want >= ~400ms", elapsed)
+	}
+	if hits.Load() != 5 {
+		t.Errorf("hits = %d, want 5", hits.Load())
+	}
+}
+
+func TestRoundTrip_RateLimiter_RetriesConsumeTokens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	// Burst 1, no refill within the test: the second attempt must block
+	// until the context expires.
+	lim := rate.NewLimiter(rate.Every(time.Hour), 1)
+	p := New(WithMaxRetries(3), WithRetryDelay(1*time.Millisecond), WithRateLimiter(lim))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	resp, err := p.RoundTrip(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+		t.Fatalf("response = %d, want nil", resp.StatusCode)
+	}
+	if err == nil {
+		t.Fatal("expected error from blocked retry, got nil")
+	}
+	if lim.Tokens() >= 1 {
+		t.Errorf("tokens = %v, want the retry to have consumed the burst", lim.Tokens())
+	}
+}
+
+func TestRoundTrip_RateLimiter_ContextCancelUnblocks(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+	}))
+	defer srv.Close()
+
+	lim := rate.NewLimiter(rate.Every(time.Hour), 1)
+	p := New(WithRateLimiter(lim))
+
+	// Drain the burst token.
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	resp, err := p.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	req, _ = http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+
+	start := time.Now()
+	_, err = p.RoundTrip(req)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("waiter took %v to unblock, want prompt", elapsed)
+	}
+	if hits.Load() != 1 {
+		t.Errorf("hits = %d, want 1 (blocked request must not be sent)", hits.Load())
 	}
 }
 
