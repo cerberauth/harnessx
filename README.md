@@ -499,7 +499,8 @@ type Snapshot struct {
     Body       []byte
     Duration   time.Duration
     Data       any
-    Truncated  bool // Body was cut at probe.DefaultMaxBodySize (10 MiB)
+    Truncated  bool   // Body was cut at probe.DefaultMaxBodySize (10 MiB)
+    BodyHash   uint64 // SimHash of Body, set by CaptureSnapshot
 }
 type Baseline = Snapshot
 
@@ -552,6 +553,26 @@ _, vulnerable, err := harnessx.ProbeAndCompareBaseline(ctx, p,
 ```
 
 It builds the request via `probe.NewRequest` plus a named credential mutator (`WithBearerToken`, `WithBasicAuth`, `WithAPIKeyHeader`, `WithAPIKeyQuery`, `WithAuthCookie`, `WithFormCredential`), sends it via `probe.DoResponse` (response bodies are capped at 10 MiB; `Snapshot.Truncated` reports a cut body, `probe.WithMaxBodySize` changes the cap), and diffs the resulting `Snapshot` against the baseline stored under `"baseline-probe"`.
+
+#### Soft 404s and richer comparators
+
+Status-only comparison can't tell a real page from a catch-all/SPA route that answers `200` for every path (a "soft 404"). Capture a baseline from a path that certainly doesn't exist with `CaptureSnapshot`, then compare with a body-aware comparator:
+
+```go
+base, _ := harnessx.CaptureSnapshot(ctx, p, getRandomPath)           // e.g. GET /<random>
+store := harnessx.NewStaticResultStore(harnessx.ResultData("baseline-probe", base))
+
+_, exposed, _ := harnessx.ProbeAndCompareBaseline(ctx, p, getBackupZip, store, "baseline-probe",
+    harnessx.CompareSimilarity(0.8))
+```
+
+| Comparator | Flags a deviation when |
+|---|---|
+| `CompareStatusCode` (default) | status code differs |
+| `CompareStatusAndLength(tolerance)` | status differs, or body length moves outside ±`tolerance` of the baseline's (`0.1` = ±10%) |
+| `CompareSimilarity(threshold)` | status differs, or the bodies' SimHash similarity (0..1) is below `threshold`; `0.8`–`0.95` is typical |
+
+They are plain `BaselineComparator` values: pass one as `BaselineCheckConfig.Compare`, or pass any number to `ProbeAndCompareBaseline`, which reports a deviation if any of them does.
 
 See the [Baseline Comparison guide](/guides/baseline) and [`examples/baseline-scan`](./examples/baseline-scan/main.go) for a full runnable scenario.
 
@@ -613,7 +634,7 @@ func SkipResourceWhen(fn func(ctx context.Context, target Target, resource Resou
 ### Baseline Comparison
 
 ```go
-type Snapshot struct { StatusCode int; Header http.Header; Body []byte; Duration time.Duration; Data any; Truncated bool }
+type Snapshot struct { StatusCode int; Header http.Header; Body []byte; Duration time.Duration; Data any; Truncated bool; BodyHash uint64 }
 type Baseline = Snapshot
 
 // BaselineSource resolves the baseline for a resource; ok=false skips the check.
@@ -689,7 +710,16 @@ func NewRequestFromResource(ctx context.Context, r Resource, mutators ...probe.R
 
 // ProbeAndCompareBaseline sends the request returned by build via probe.DoResponse,
 // and compares the resulting Snapshot against the baseline stored under baselineID.
-func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error)
+func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID, comparators ...BaselineComparator) (Snapshot, bool, error)
+
+// CaptureSnapshot sends the request from build and returns it as a Snapshot.
+func CaptureSnapshot(ctx context.Context, p *probe.Probe, build probe.RequestBuilder) (Snapshot, error)
+
+// CompareStatusAndLength flags a status change or a body length outside ±tolerance.
+func CompareStatusAndLength(tolerance float64) BaselineComparator
+
+// CompareSimilarity flags a status change or a body SimHash similarity below threshold.
+func CompareSimilarity(threshold float64) BaselineComparator
 ```
 
 ### Variants
