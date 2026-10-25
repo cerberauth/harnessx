@@ -397,6 +397,8 @@ restScenario := harnessx.Scenario{
 summary, err := engine.RunScenario(ctx, target, restScenario)
 ```
 
+`RunScenario` also accepts the run options described under [Selecting checks for a run](#selecting-checks-for-a-run), so a scenario can be narrowed per call: `engine.RunScenario(ctx, target, restScenario, harnessx.WithExclude("schema-check"))`. Dependencies of the kept checks still run. `harnessx.FilterChecks(checks, opts...)` applies the same selection without running anything.
+
 To share business logic across scenarios while varying the dependency order, define the `Run` function as a variable and reference it in multiple `Check` values with different `DependsOn` fields:
 
 ```go
@@ -466,7 +468,15 @@ type Reporter interface {
 }
 ```
 
-`OnScanStart` fires before any check runs with the total registered check count — use it to initialise a progress bar. `OnScanComplete` is **always** called — even after a context cancellation or early error.
+`OnScanStart` fires before any check runs with the number of checks that will run — after run-option filtering and dependency closure — so use it to initialise a progress bar. A per-resource check counts once there, but `OnCheckStart`/`OnCheckComplete` fire once per resource; a reporter that also implements the optional `ResourcePlanReporter` gets the per-resource count:
+
+```go
+type ResourcePlanReporter interface {
+    OnResourcesDiscovered(check Check, resources int)
+}
+```
+
+It is called once per `ScopePerResource` check, just before it fans out, and not when the check is skipped for lack of resources. `OnScanComplete` is **always** called — even after a context cancellation or early error.
 
 For a check with `Variants`, `OnCheckComplete` still fires once with the merged `Result` — inspect `Result.Attempts` to see the outcome of each variant individually (the built-in `OTelReporter` records one span event per attempt, tagged with its variant).
 
@@ -580,7 +590,11 @@ func WithExclude(ids ...CheckID) RunOption
 // RunScenario executes only the checks in scenario against target.
 // Ignores checks registered via Register or WithChecks.
 // Always calls Reporter.OnScanComplete before returning.
-func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario) (ScanSummary, error)
+func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario, opts ...RunOption) (ScanSummary, error)
+
+// FilterChecks returns the checks selected by opts, with the same
+// dependency closure Run and RunScenario apply.
+func FilterChecks(checks []Check, opts ...RunOption) []Check
 ```
 
 ### Skip Decisions

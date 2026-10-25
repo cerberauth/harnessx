@@ -534,3 +534,89 @@ func TestEngine_SkipResourceWhen_FallsBackToCheckLevelSkip(t *testing.T) {
 		t.Errorf("Executed: want 1, got %d", summary.Executed)
 	}
 }
+
+// planReporter is a testReporter that also implements ResourcePlanReporter.
+type planReporter struct {
+	testReporter
+	plan map[CheckID]int
+}
+
+func (r *planReporter) OnResourcesDiscovered(c Check, n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.plan == nil {
+		r.plan = map[CheckID]int{}
+	}
+	r.plan[c.ID] = n
+}
+
+func TestEngine_ResourcePlanReporter(t *testing.T) {
+	rep := &planReporter{}
+	e := New(WithReporters(rep), WithDefaultTimeout(5*time.Second))
+
+	recon := Check{
+		ID: checkIDRecon,
+		Run: func(_ context.Context, _ Target, _ ResultStore) (Result, error) {
+			return Result{Resources: []Resource{{ID: "r1"}, {ID: "r2"}}}, nil
+		},
+	}
+	endpoint := Check{
+		ID:        checkIDEndpoint,
+		Scope:     ScopePerResource,
+		DependsOn: []CheckID{checkIDRecon},
+		RunResource: func(_ context.Context, _ Target, res Resource, _ ResultStore) (Result, error) {
+			return Result{ResourceID: res.ID}, nil
+		},
+	}
+	// Per-resource check with nothing to fan out over (no resources discovered
+	// by anyone upstream of it in this scenario).
+	orphan := Check{
+		ID:    "orphan",
+		Scope: ScopePerResource,
+		RunResource: func(_ context.Context, _ Target, res Resource, _ ResultStore) (Result, error) {
+			return Result{ResourceID: res.ID}, nil
+		},
+	}
+	scenario := Scenario{Checks: []Check{recon, endpoint}}
+
+	if _, err := e.RunScenario(context.Background(), testTarget, scenario); err != nil {
+		t.Fatalf("RunScenario: %v", err)
+	}
+	if got := rep.plan[checkIDEndpoint]; got != 2 {
+		t.Errorf("planned resources for endpoint = %d, want 2", got)
+	}
+	if _, ok := rep.plan[checkIDRecon]; ok {
+		t.Error("global check must not be reported via OnResourcesDiscovered")
+	}
+	if rep.totalChecks != 2 {
+		t.Errorf("totalChecks = %d, want 2", rep.totalChecks)
+	}
+
+	// Without upstream discovery the per-resource check is skipped and not planned.
+	rep2 := &planReporter{}
+	e2 := New(WithReporters(rep2))
+	if _, err := e2.RunScenario(context.Background(), testTarget, Scenario{Checks: []Check{orphan}}); err != nil {
+		t.Fatalf("RunScenario: %v", err)
+	}
+	if _, ok := rep2.plan["orphan"]; ok {
+		t.Error("check skipped for lack of resources must not be planned")
+	}
+}
+
+func TestEngine_PlainReporterStillWorks(t *testing.T) {
+	// A Reporter without the optional extension must be unaffected.
+	rep := &testReporter{}
+	e := New(WithReporters(rep))
+	scenario := Scenario{Checks: []Check{
+		{ID: checkIDRecon, Run: func(context.Context, Target, ResultStore) (Result, error) {
+			return Result{Resources: []Resource{{ID: "r1"}}}, nil
+		}},
+		{ID: checkIDEndpoint, Scope: ScopePerResource, DependsOn: []CheckID{checkIDRecon},
+			RunResource: func(_ context.Context, _ Target, res Resource, _ ResultStore) (Result, error) {
+				return Result{ResourceID: res.ID}, nil
+			}},
+	}}
+	if _, err := e.RunScenario(context.Background(), testTarget, scenario); err != nil {
+		t.Fatalf("RunScenario: %v", err)
+	}
+}

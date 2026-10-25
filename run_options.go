@@ -96,6 +96,19 @@ func inFold(v string, set []string) bool {
 	return false
 }
 
+// FilterChecks returns the subset of checks selected by opts, applying the
+// same rules as Engine.Run: WithOnly, WithExclude and the WithFilter family,
+// plus the transitive DependsOn closure of every selected check (WithExclude
+// still wins over the closure). With no opts, checks is returned unchanged.
+// Use it to know how many checks a run will execute before starting it.
+func FilterChecks(checks []Check, opts ...RunOption) []Check {
+	var cfg runConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg.filter(checks)
+}
+
 func (cfg runConfig) matches(c Check) bool {
 	for _, p := range cfg.predicates {
 		if !p(c) {

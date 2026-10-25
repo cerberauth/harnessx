@@ -2,6 +2,7 @@ package harnessx
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"testing"
 )
@@ -96,5 +97,33 @@ func TestEngineRun_WithMinCVSSScore_KeepsDependencies(t *testing.T) {
 	}
 	if summary.TotalChecks != 3 {
 		t.Fatalf("TotalChecks: want 3 (high, high-with-dep, dep), got %d", summary.TotalChecks)
+	}
+}
+
+func TestFilterChecks_MatchesRunConfigFilter(t *testing.T) {
+	cases := map[string][]RunOption{
+		"none":          nil,
+		"only":          {WithOnly("high-with-dep")},
+		"exclude":       {WithExclude("low", "dep")},
+		"min cvss":      {WithMinCVSSScore(8.0)},
+		"only+exclude":  {WithOnly("high", "low"), WithExclude("low")},
+		"cwe + owasp":   {WithCWEID("CWE-345"), WithOWASP("API2:2023")},
+		"exclude a dep": {WithOnly("high-with-dep"), WithExclude("dep")},
+	}
+	for name, opts := range cases {
+		t.Run(name, func(t *testing.T) {
+			want := buildRunConfig(opts...).filter(metaChecks())
+			got := FilterChecks(metaChecks(), opts...)
+			ids := func(cs []Check) []CheckID {
+				out := make([]CheckID, len(cs))
+				for i, c := range cs {
+					out[i] = c.ID
+				}
+				return out
+			}
+			if !slices.Equal(ids(got), ids(want)) {
+				t.Errorf("FilterChecks = %v, want %v", ids(got), ids(want))
+			}
+		})
 	}
 }

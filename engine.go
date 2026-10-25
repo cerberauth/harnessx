@@ -145,11 +145,7 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 	copy(checks, e.checks)
 	e.mu.RUnlock()
 
-	var cfg runConfig
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-	return e.run(ctx, target, cfg.filter(checks), nil)
+	return e.run(ctx, target, FilterChecks(checks, opts...), nil)
 }
 
 // RunScenario executes the checks in scenario against target using the
@@ -157,16 +153,20 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 // modify the engine's registered check list — scenario.Checks is fully
 // self-contained.
 //
+// opts narrow scenario.Checks exactly as they narrow the registered checks in
+// Run, including the transitive dependency closure: a kept check's
+// dependencies still run unless excluded.
+//
 // If scenario.Reporters is non-empty it is used instead of the engine's
 // configured reporters (see [WithReporters]), so a shared engine can give
 // each caller its own reporters.
 //
 // Reporter.OnScanComplete is always called before returning, even if
 // scenario.Checks is empty.
-func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario) (ScanSummary, error) {
+func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario, opts ...RunOption) (ScanSummary, error) {
 	checks := make([]Check, len(scenario.Checks))
 	copy(checks, scenario.Checks)
-	return e.run(ctx, target, checks, scenario.Reporters)
+	return e.run(ctx, target, FilterChecks(checks, opts...), scenario.Reporters)
 }
 
 func (e *Engine) run(ctx context.Context, target Target, checks []Check, callReporters []Reporter) (ScanSummary, error) {
@@ -332,6 +332,12 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 					summary.Results = append(summary.Results, skipped)
 					summaryMu.Unlock()
 					return
+				}
+
+				for _, r := range reporters {
+					if pr, ok := r.(ResourcePlanReporter); ok {
+						pr.OnResourcesDiscovered(chk, len(resources))
+					}
 				}
 
 				resConcurrency := chk.Concurrency
