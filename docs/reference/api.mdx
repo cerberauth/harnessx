@@ -642,7 +642,11 @@ A skipped check is reported with `OnCheckComplete` only, without a preceding `On
 
 **Implementations:**
 - `reporters.NoopReporter` — does nothing (useful as a base to embed)
+- `reporters.TextReporter` — `NewTextReporter(w io.Writer)`: one human-readable line per finished check, its observations indented beneath, and a summary
+- `reporters.JSONReporter` — `NewJSONReporter(w io.Writer)`: JSON Lines with `scan_start`, `check_complete` and `scan_complete` events
 - `reporters.OTelReporter` — emits spans and metrics via OpenTelemetry (`github.com/cerberauth/harnessx/reporters`)
+
+`TextReporter` and `JSONReporter` are safe for concurrent use, and an `Err()` method returns the first write error; a write error never interrupts the scan.
 
 ### ResourcePlanReporter
 
@@ -669,7 +673,9 @@ func WithPrefix(prefix string) OTelOption
 
 Metrics: `{prefix}.check.duration`, `{prefix}.check.executions`, `{prefix}.observations`, `{prefix}.scan.duration` (default prefix: `"harnessx"`). `NewOTelReporter` returns an error if an instrument cannot be created.
 
-Spans are keyed by check and resource, so use one reporter per concurrent scan; sharing one between simultaneous runs of the same check can mix up their spans.
+Spans form a tree: a `{prefix}.scan` span, started in `OnScanStart` with `target.url` / `target.host` and ended in `OnScanComplete` with the totals, is the parent of one `{prefix}.check` span per check execution. A skipped check never starts, so it has no span; it is recorded as a `check.skipped` event (`check.id`, `resource.id`, `check.skip_reason`) on the scan span. A scan that fails before it starts (for example with `ErrNoChecks`) still gets a scan span carrying the error.
+
+A reporter holds one scan span at a time, and check spans are keyed by check and resource, so use one reporter per concurrent scan; it can be reused for scans that run one after another.
 
 ### ScanError
 
@@ -807,6 +813,14 @@ See [Scenarios](../guides/scenarios/).
 
 ## Run Options
 
+### WithRunReporters
+
+Gives one `Run` or `RunScenario` call its own reporters, replacing the engine's (`WithReporters`) and, for `RunScenario`, `Scenario.Reporters`. Calling it more than once adds to the list.
+
+```go
+func WithRunReporters(reporters ...Reporter) RunOption
+```
+
 ### WithOnly
 
 Restricts a `Run` call to the given check IDs.
@@ -905,6 +919,20 @@ func WithDefaultTimeout(d time.Duration) Option
 ```
 
 **Default:** `30s`. Non-positive values are ignored.
+
+### WithResourceMerge
+
+Choose what happens when a check discovers a resource whose `ID` is already known. The resource is never added twice, so per-resource checks run once per ID; the merge function decides which version is kept.
+
+```go
+type ResourceMergeFunc func(existing, incoming Resource) Resource
+
+func KeepFirstResource(existing, _ Resource) Resource  // default
+func KeepLastResource(_, incoming Resource) Resource
+func WithResourceMerge(fn ResourceMergeFunc) Option    // nil is ignored
+```
+
+Checks in the same dependency level run concurrently, so which of their versions is "last" is not deterministic; make one check depend on the other to fix the order.
 
 ### WithChecks
 

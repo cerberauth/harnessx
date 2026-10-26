@@ -13,6 +13,7 @@ type engineConfig struct {
 	defaultTimeout         time.Duration
 	reporters              []Reporter
 	initialChecks          []Check
+	resourceMerge          ResourceMergeFunc
 }
 
 func defaultConfig() engineConfig {
@@ -75,5 +76,32 @@ func WithReporters(reporters ...Reporter) Option {
 func WithChecks(checks ...Check) Option {
 	return func(cfg *engineConfig) {
 		cfg.initialChecks = append(cfg.initialChecks, checks...)
+	}
+}
+
+// ResourceMergeFunc decides what to keep when a check discovers a resource whose
+// ID is already known: existing is the version held so far, incoming the newly
+// discovered one, and the result replaces the held version. The resource stays
+// in its original position, and per-resource checks run once per ID.
+type ResourceMergeFunc func(existing, incoming Resource) Resource
+
+// KeepFirstResource is the default ResourceMergeFunc: the first resource
+// discovered under an ID wins.
+func KeepFirstResource(existing, _ Resource) Resource { return existing }
+
+// KeepLastResource is a ResourceMergeFunc under which the most recently
+// discovered version of a resource wins. Checks in the same dependency level run
+// concurrently, so which of their versions is last is not deterministic; make
+// the later check depend on the earlier one to fix the order.
+func KeepLastResource(_, incoming Resource) Resource { return incoming }
+
+// WithResourceMerge sets how the engine resolves two discoveries of the same
+// resource ID; see ResourceMergeFunc. The default is KeepFirstResource. A nil fn
+// is ignored.
+func WithResourceMerge(fn ResourceMergeFunc) Option {
+	return func(cfg *engineConfig) {
+		if fn != nil {
+			cfg.resourceMerge = fn
+		}
 	}
 }

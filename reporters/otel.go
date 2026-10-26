@@ -21,11 +21,20 @@ type spanKey struct {
 // OTelReporter is a harnessx.Reporter that emits an OpenTelemetry span per
 // check execution and records check and scan metrics. Build one with
 // NewOTelReporter.
+//
+// The spans form a tree: a "<prefix>.scan" span, started when the scan starts,
+// is the parent of one "<prefix>.check" span per check execution. A check that
+// is skipped has no span of its own — skips are reported without a preceding
+// OnCheckStart — so it is recorded as a "check.skipped" event on the scan span.
 type OTelReporter struct {
 	baseCtx     context.Context
 	tracer      trace.Tracer
 	activeSpans sync.Map // spanKey → trace.Span
 	prefix      string
+
+	scanMu   sync.Mutex
+	scanCtx  context.Context // parent of the check spans; baseCtx outside a scan
+	scanSpan trace.Span      // nil outside a scan
 
 	checkDuration      metric.Float64Histogram
 	checkCounter       metric.Int64Counter
@@ -107,9 +116,32 @@ func NewOTelReporter(ctx context.Context, tracer trace.Tracer, meter metric.Mete
 	}, nil
 }
 
-// OnScanStart does nothing: the scan span is started in OnScanComplete, once the
-// scan's duration is known.
-func (o *OTelReporter) OnScanStart(_ harnessx.Target, _ int) {}
+// OnScanStart starts the scan span, which the check spans become children of.
+func (o *OTelReporter) OnScanStart(target harnessx.Target, totalChecks int) {
+	attrs := []attribute.KeyValue{attribute.Int("scan.total_checks", totalChecks)}
+	if target.URL != "" {
+		attrs = append(attrs, attribute.String("target.url", target.URL))
+	}
+	if target.Host != "" {
+		attrs = append(attrs, attribute.String("target.host", target.Host))
+	}
+
+	ctx, span := o.tracer.Start(o.baseCtx, o.prefix+".scan", trace.WithAttributes(attrs...))
+
+	o.scanMu.Lock()
+	defer o.scanMu.Unlock()
+	o.scanCtx, o.scanSpan = ctx, span
+}
+
+// checkParent returns the context check spans are started under.
+func (o *OTelReporter) checkParent() context.Context {
+	o.scanMu.Lock()
+	defer o.scanMu.Unlock()
+	if o.scanCtx != nil {
+		return o.scanCtx
+	}
+	return o.baseCtx
+}
 
 func (o *OTelReporter) OnCheckStart(check harnessx.Check, _ harnessx.Target, resource *harnessx.Resource) {
 	var resourceID string
@@ -124,13 +156,17 @@ func (o *OTelReporter) OnCheckStart(check harnessx.Check, _ harnessx.Target, res
 		attrs = append(attrs, attribute.String("resource.id", resourceID))
 	}
 
-	_, span := o.tracer.Start(o.baseCtx, o.prefix+".check", trace.WithAttributes(attrs...))
+	_, span := o.tracer.Start(o.checkParent(), o.prefix+".check", trace.WithAttributes(attrs...))
 	o.activeSpans.Store(spanKey{check.ID, resourceID}, span)
 }
 
 func (o *OTelReporter) OnCheckComplete(result harnessx.Result) {
 	key := spanKey{result.CheckID, result.ResourceID}
-	if v, ok := o.activeSpans.LoadAndDelete(key); ok {
+	v, started := o.activeSpans.LoadAndDelete(key)
+	if !started && result.Skipped {
+		o.recordSkipEvent(result)
+	}
+	if started {
 		span := v.(trace.Span)
 
 		if result.Skipped {
@@ -184,26 +220,53 @@ func (o *OTelReporter) OnCheckComplete(result harnessx.Result) {
 	}
 }
 
+// recordSkipEvent adds a "check.skipped" event to the scan span for a check
+// that was skipped without ever starting.
+func (o *OTelReporter) recordSkipEvent(result harnessx.Result) {
+	o.scanMu.Lock()
+	span := o.scanSpan
+	o.scanMu.Unlock()
+	if span == nil {
+		return
+	}
+
+	attrs := []attribute.KeyValue{attribute.String("check.id", string(result.CheckID))}
+	if result.ResourceID != "" {
+		attrs = append(attrs, attribute.String("resource.id", result.ResourceID))
+	}
+	if result.SkipReason != "" {
+		attrs = append(attrs, attribute.String("check.skip_reason", result.SkipReason))
+	}
+	span.AddEvent("check.skipped", trace.WithAttributes(attrs...))
+}
+
+// OnScanComplete ends the scan span with the scan's outcome and records its
+// duration. A scan that failed before it started, such as one with no checks,
+// has no scan span yet; one is created for it so that the failure is visible.
 func (o *OTelReporter) OnScanComplete(summary harnessx.ScanSummary) {
-	startTime := time.Now().Add(-summary.Duration)
+	o.scanMu.Lock()
+	span := o.scanSpan
+	o.scanCtx, o.scanSpan = nil, nil
+	o.scanMu.Unlock()
 
-	_, span := o.tracer.Start(o.baseCtx, o.prefix+".scan",
-		trace.WithTimestamp(startTime),
-		trace.WithAttributes(
-			attribute.Int("scan.total_checks", summary.TotalChecks),
-			attribute.Int("scan.executed", summary.Executed),
-			attribute.Int("scan.skipped", summary.Skipped),
-			attribute.Int("scan.failed", summary.Failed),
-			attribute.Int("scan.observations", len(summary.Observations)),
-		),
+	if span == nil {
+		_, span = o.tracer.Start(o.baseCtx, o.prefix+".scan",
+			trace.WithTimestamp(time.Now().Add(-summary.Duration)),
+			trace.WithAttributes(attribute.Int("scan.total_checks", summary.TotalChecks)),
+		)
+	}
+
+	span.SetAttributes(
+		attribute.Int("scan.executed", summary.Executed),
+		attribute.Int("scan.skipped", summary.Skipped),
+		attribute.Int("scan.failed", summary.Failed),
+		attribute.Int("scan.observations", len(summary.Observations)),
 	)
-
 	if summary.Err != nil {
 		span.RecordError(summary.Err)
 		span.SetStatus(codes.Error, summary.Err.Error())
 	}
-
-	span.End(trace.WithTimestamp(time.Now()))
+	span.End()
 
 	o.scanDuration.Record(o.baseCtx, summary.Duration.Seconds())
 }
