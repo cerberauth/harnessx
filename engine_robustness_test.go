@@ -272,6 +272,9 @@ func TestStaticResultStore_FallbackAndOrdering(t *testing.T) {
 		Result{CheckID: "b", ResourceID: "r1", Observations: []Observation{{Title: "b-r1"}}},
 		Result{CheckID: "a", ResourceID: "r1", Observations: []Observation{{Title: "a-r1"}}},
 		Result{CheckID: "g", Observations: []Observation{{Title: "g"}}},
+		Result{CheckID: "c", ResourceID: "r3", Observations: []Observation{{Title: "c-r3"}}},
+		Result{CheckID: "c", ResourceID: "r1", Observations: []Observation{{Title: "c-r1"}}},
+		Result{CheckID: "c", ResourceID: "r2", Observations: []Observation{{Title: "c-r2"}}},
 	)
 
 	observations := store.Observations()
@@ -279,7 +282,7 @@ func TestStaticResultStore_FallbackAndOrdering(t *testing.T) {
 	for _, o := range observations {
 		got = append(got, o.Title)
 	}
-	if want := []string{"g", "a-r1", "b-r1", "b-r2"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"g", "a-r1", "b-r1", "b-r2", "c-r1", "c-r2", "c-r3"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Observations = %v, want global results first, then per-resource by check and resource: %v", got, want)
 	}
 
@@ -353,15 +356,15 @@ func TestRunVariants_ParallelLimitStopsWaitingOnCancel(t *testing.T) {
 func TestEngine_LevelSlotWaitersAreRecordedOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	release := make(chan struct{})
+	// Both checks do the same thing, so whichever gets the only slot cancels the
+	// scan and holds the slot while the other waits for it.
+	holdSlot := func(context.Context, Target, ResultStore) (Result, error) {
+		cancel()
+		<-release
+		return Result{}, nil
+	}
 	e := New(WithMaxConcurrency(1))
-	if err := e.Register(
-		globalCheck("holder", nil, func(context.Context, Target, ResultStore) (Result, error) {
-			cancel()
-			<-release
-			return Result{}, nil
-		}),
-		globalCheck("waiter", nil, stubRun),
-	); err != nil {
+	if err := e.Register(globalCheck("one", nil, holdSlot), globalCheck("two", nil, holdSlot)); err != nil {
 		t.Fatal(err)
 	}
 	go func() {
@@ -376,6 +379,74 @@ func TestEngine_LevelSlotWaitersAreRecordedOnCancel(t *testing.T) {
 	}
 	if got := summary.Executed + summary.Skipped + summary.Failed; got != 2 {
 		t.Errorf("Executed+Skipped+Failed = %d, want 2: the check waiting for a slot must be recorded", got)
+	}
+	if summary.Skipped != 1 {
+		t.Errorf("Skipped = %d, want the waiting check recorded as skipped", summary.Skipped)
+	}
+}
+
+func TestEngine_ResourceSlotWaitersAreRecordedOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	release := make(chan struct{})
+	e := New()
+	if err := e.Register(
+		discover(idDiscover, Resource{ID: "r1"}, Resource{ID: "r2"}, Resource{ID: "r3"}),
+		Check{
+			ID: "serial", Scope: ScopePerResource, DependsOn: []CheckID{idDiscover}, Concurrency: 1,
+			RunResource: func(context.Context, Target, Resource, ResultStore) (Result, error) {
+				cancel()
+				<-release
+				return Result{}, nil
+			},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond)
+		close(release)
+	}()
+
+	summary, err := e.Run(ctx, Target{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	cancelled := 0
+	for _, r := range summary.Results {
+		if r.CheckID == "serial" && r.Skipped && r.SkipReason == reasonCancelled {
+			cancelled++
+		}
+	}
+	if cancelled != 2 {
+		t.Errorf("%d resources recorded as cancelled, want the 2 that never got a slot", cancelled)
+	}
+}
+
+func TestEngine_ObservationsAreOrderedAcrossPerResourceChecks(t *testing.T) {
+	obs := func(id CheckID) ResourceCheckFunc {
+		return func(_ context.Context, _ Target, r Resource, _ ResultStore) (Result, error) {
+			return Result{Observations: []Observation{{Title: string(id) + "-" + r.ID}}}, nil
+		}
+	}
+	var seen []string
+	_, err := runEngine(t,
+		discover(idDiscover, Resource{ID: "r2"}, Resource{ID: "r1"}, Resource{ID: "r3"}),
+		resourceCheck("zeta", []CheckID{idDiscover}, obs("zeta")),
+		resourceCheck("alpha", []CheckID{idDiscover}, obs("alpha")),
+		globalCheck("reader", []CheckID{"zeta", "alpha"}, func(_ context.Context, _ Target, store ResultStore) (Result, error) {
+			for _, o := range store.Observations() {
+				seen = append(seen, o.Title)
+			}
+			return Result{}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"alpha-r1", "alpha-r2", "alpha-r3", "zeta-r1", "zeta-r2", "zeta-r3"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Errorf("store.Observations() = %v, want %v", seen, want)
 	}
 }
 
