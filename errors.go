@@ -12,6 +12,8 @@ var (
 	ErrNoChecks          = errors.New("harnessx: no checks registered")
 )
 
+// ScanError records a failed check — typically a recovered panic — and is
+// stored in Result.Err. CheckID identifies the check when known.
 type ScanError struct {
 	CheckID CheckID
 	Cause   error

@@ -58,7 +58,7 @@ var Check = checkdef.NewCheck(def, run,
 )
 ```
 
-`checkdef` is a separate package so the root `harnessx` package keeps zero third-party dependencies; only code that imports `checkdef` pulls in a YAML/TOML parser.
+`checkdef` is a separate package so the root `harnessx` package does not depend on a YAML/TOML parser; only code that imports `checkdef` compiles one in.
 
 ## Execution Scopes
 

@@ -1,5 +1,8 @@
 package harnessx
 
+// IfCheckPassed is true when check id ran, was not skipped, returned no error
+// and produced no observations. It is false when no result is recorded for id,
+// which includes any ScopePerResource check (see ResultStore).
 func IfCheckPassed(id CheckID) Condition {
 	return func(store ResultStore) bool {
 		r, ok := store.Get(id)
@@ -10,6 +13,9 @@ func IfCheckPassed(id CheckID) Condition {
 	}
 }
 
+// IfCheckObserved is true when check id produced at least one observation. It
+// is false when no result is recorded for id, which includes any
+// ScopePerResource check (see ResultStore).
 func IfCheckObserved(id CheckID) Condition {
 	return func(store ResultStore) bool {
 		r, ok := store.Get(id)
@@ -20,6 +26,9 @@ func IfCheckObserved(id CheckID) Condition {
 	}
 }
 
+// IfCheckSkipped is true when check id was skipped. It is false when no result
+// is recorded for id, which includes any ScopePerResource check (see
+// ResultStore).
 func IfCheckSkipped(id CheckID) Condition {
 	return func(store ResultStore) bool {
 		r, ok := store.Get(id)
@@ -30,6 +39,7 @@ func IfCheckSkipped(id CheckID) Condition {
 	}
 }
 
+// All is true when every condition is true, and for no conditions at all.
 func All(conditions ...Condition) Condition {
 	return func(store ResultStore) bool {
 		for _, c := range conditions {
@@ -41,6 +51,7 @@ func All(conditions ...Condition) Condition {
 	}
 }
 
+// Any is true when at least one condition is true, and false for no conditions.
 func Any(conditions ...Condition) Condition {
 	return func(store ResultStore) bool {
 		for _, c := range conditions {
@@ -52,6 +63,7 @@ func Any(conditions ...Condition) Condition {
 	}
 }
 
+// Not negates c.
 func Not(c Condition) Condition {
 	return func(store ResultStore) bool {
 		return !c(store)

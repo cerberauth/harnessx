@@ -2,6 +2,14 @@ package harnessx
 
 import "time"
 
+// Reporter receives progress callbacks while a scan runs. Checks of one
+// dependency level run concurrently, so OnCheckStart and OnCheckComplete can be
+// called from several goroutines at once and implementations must be safe for
+// concurrent use. OnScanStart and OnScanComplete are called once per scan.
+//
+// A skipped check is reported with OnCheckComplete only, with no preceding
+// OnCheckStart. A ScopePerResource check is reported once per resource, with
+// OnCheckStart's resource set.
 type Reporter interface {
 	// OnScanStart fires once before any check runs. totalChecks is the number
 	// of checks that will be scheduled: the count after run-option filtering
@@ -27,6 +35,13 @@ type ResourcePlanReporter interface {
 	OnResourcesDiscovered(check Check, resources int)
 }
 
+// ScanSummary is the aggregate outcome of a scan, passed to
+// Reporter.OnScanComplete and returned by Engine.Run.
+//
+// TotalChecks counts scheduled checks, a per-resource check counting once;
+// Executed, Skipped and Failed count individual executions, so a per-resource
+// check adds one per resource. Results and Observations are in completion
+// order, which is not deterministic across concurrent checks.
 type ScanSummary struct {
 	Target       Target
 	TotalChecks  int

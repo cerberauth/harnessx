@@ -9,29 +9,34 @@ sidebar:
 
 ### Target
 
-Represents what you're scanning.
+What you're scanning. The engine never interprets it; it is passed unchanged to every check and reporter.
 
 ```go
 type Target struct {
-  ID string
+  URL      string
+  Host     string
+  Metadata map[string]string
+  Data     any
 }
 ```
 
 ### Resource
 
-Discovered by checks and consumed by dependent per-resource checks.
+Discovered by checks (via `Result.Resources`) and consumed by per-resource checks that depend on them. Resource IDs are expected to be unique across a run.
 
 ```go
 type Resource struct {
   ID       string
-  Type     string
-  Metadata map[string]any
+  URL      string
+  Method   string // defaults to GET in NewRequestFromResource when empty
+  Metadata map[string]string
+  Data     any // read back with ResourceDataAs
 }
 ```
 
 ### CheckID
 
-Unique identifier for a check. Type alias for `string`.
+Unique identifier for a check. A defined type over `string`, not an alias.
 
 ```go
 type CheckID string
@@ -39,26 +44,26 @@ type CheckID string
 
 ### CheckScope
 
-Where a check runs.
+How often a check runs. The zero value is `ScopeGlobal`.
 
 ```go
-type CheckScope string
+type CheckScope int
 
 const (
-  ScopeGlobal      CheckScope = "global"
-  ScopePerResource CheckScope = "per-resource"
+  ScopeGlobal      CheckScope = iota // runs once
+  ScopePerResource                   // runs once per resource known when its level starts
 )
 ```
 
 ### Observation
 
-An issue or noteworthy outcome found by a check.
+An issue or noteworthy outcome found by a check. The engine does not fill in `CheckID` or `ResourceID` for you; `Variant` is set automatically, if left blank, for checks that use `Variants`.
 
 ```go
 type Observation struct {
   CheckID     CheckID
   ResourceID  string
-  Variant     string // set automatically for checks that use Variants, if left blank
+  Variant     string
   Title       string
   Description string
   Evidence    string
@@ -68,18 +73,25 @@ type Observation struct {
 
 ### Result
 
-The result of a single check execution.
+The result of a single check execution (one resource, for a per-resource check). The engine sets `CheckID`, `ResourceID` and `Duration` on the results it records.
 
 ```go
 type Result struct {
-  Skipped      bool
+  CheckID      CheckID
+  ResourceID   string
   Observations []Observation
-  Resources    []Resource
+  Resources    []Resource    // discovered resources, visible to later levels
+  Skipped      bool
+  SkipReason   string
   Duration     time.Duration
-  Err          error
-  Attempts     []Attempt // one entry per variant, for checks that use Variants
+  Metadata     map[string]string
+  Data         any           // output for later checks, see GetData / DataAs
+  Err          error         // non-nil marks the check as failed
+  Attempts     []Attempt     // one entry per variant, for checks that use Variants
 }
 ```
+
+Observations report findings and do not by themselves fail a check; only a non-nil `Err` does.
 
 ### Attempt / VariantMode
 
@@ -119,6 +131,9 @@ type Snapshot struct {
   Body       []byte
   Duration   time.Duration
   Data       any
+
+  Truncated bool   // Body was cut at probe.DefaultMaxBodySize
+  BodyHash  uint64 // SimHash of Body, set by CaptureSnapshot; 0 means unset
 }
 type Baseline = Snapshot
 ```
@@ -137,13 +152,23 @@ func BaselineFromCheck(id CheckID) BaselineSource
 
 ### BaselineComparator
 
-Compares a baseline against a freshly captured snapshot and returns any resulting `Observation`s.
+Compares a baseline against a freshly captured snapshot and returns any resulting `Observation`s. An empty result means no deviation.
 
 ```go
 type BaselineComparator func(baseline, current Snapshot) []Observation
 
 func CompareStatusCode(baseline, current Snapshot) []Observation // default comparator
+func CompareStatusAndLength(tolerance float64) BaselineComparator
+func CompareSimilarity(threshold float64) BaselineComparator
+func SimHash(body []byte) uint64
 ```
+
+- `CompareStatusCode` flags any change in status code.
+- `CompareStatusAndLength(tolerance)` flags a status change, or a body length outside ±`tolerance` of the baseline's (`0.1` allows ±10%). A negative tolerance is treated as `0`.
+- `CompareSimilarity(threshold)` flags a status change, or a body whose similarity to the baseline's falls below `threshold` (0..1, 1 = identical). Similarity is `1 −` the normalised Hamming distance between the two bodies' `SimHash`es, so a catch-all "not found" page that echoes the requested path scores high while a genuinely different page scores low. A typical threshold is 0.8–0.95. A non-zero `Snapshot.BodyHash` is used instead of hashing `Body`.
+- `SimHash` returns a 64-bit locality-sensitive fingerprint over the case-insensitive letter/digit tokens of `body`; an empty or token-free body hashes to `0`.
+
+Length and similarity are computed on `Snapshot.Body`, which is capped by the probe's body limit — check `Snapshot.Truncated` before trusting them on very large responses.
 
 ### BaselineCheckConfig
 
@@ -232,15 +257,95 @@ func WithAuthCookie(name, value string) RequestMutator            // cookie, Sec
 func WithFormCredential(name, value string) RequestMutator        // urlencoded form body field, switches method to POST
 ```
 
-### ProbeAndCompareBaseline
+### CredentialLocation / ApplyCredential
 
-Sends the request returned by a `probe.RequestBuilder` via `probe.Do`, and diffs the result against the baseline stored under `baselineID` using `CompareStatusCode`. Useful for one-off probes (credential swaps, header/param tampering, auth-bypass checks) that don't need the full `NewBaselineCheck` wiring.
+`probe` package. The declarative counterpart to the mutators above, for callers that pick the placement at runtime.
 
 ```go
-func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error)
+type CredentialLocation struct {
+  In     string // CredentialLocationHeader (default), CredentialLocationCookie, CredentialLocationQuery or CredentialLocationBody
+  Name   string // header/cookie/query/form-field name
+  Prefix string // value prefix, e.g. "Bearer "
+}
+
+func (l CredentialLocation) WithDefaults() CredentialLocation // Authorization: Bearer when nothing is set
+func (l CredentialLocation) Validate() error                  // rejects an unknown In
+
+func NewCredentialRequest(ctx context.Context, target, value string, loc CredentialLocation) (*http.Request, error)
+func ApplyCredential(req *http.Request, value string, loc CredentialLocation) (*http.Request, error)
 ```
 
-Returns the captured `Snapshot` (with the full response header/body/duration) and whether it deviated from the baseline. Building a `Result`/`Observation` from that is left to the caller.
+`NewCredentialRequest` builds a `GET` against `target` and applies `value` at `loc`. `ApplyCredential` places `loc.Prefix+value` on a request you already built and returns a copy; `req` is never modified and keeps its method, URL, headers, cookies and body:
+
+- `header` / `query`: the named header or query parameter is set, replacing any existing value;
+- `cookie`: a cookie is added (as `WithAuthCookie`);
+- `body`: as `WithFormCredential` — the method becomes `POST` and the body is replaced by a urlencoded form holding only `loc.Name`.
+
+### Probe
+
+`probe` package. An `http.RoundTripper` that adds a default `User-Agent`, retries with exponential backoff and jitter, honours `Retry-After` / `X-RateLimit-Reset`, and can rate-limit.
+
+```go
+func New(opts ...Option) *Probe
+func (p *Probe) Client() *http.Client
+func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error)
+
+func WithUserAgent(ua string) Option          // default for requests that set none; a caller-set User-Agent is never overridden
+func WithMaxRetries(n int) Option             // 0 = a single attempt (default 3)
+func WithRetryDelay(d time.Duration) Option   // base backoff delay, capped at 60s (default 500ms)
+func WithTransport(t http.RoundTripper) Option
+func WithTimeout(d time.Duration) Option      // timeout of Client(), retries included (default 30s)
+func WithRetryNonIdempotent() Option          // also retry POST/PATCH on network errors and 503
+func WithRateLimiter(l *rate.Limiter) Option  // waits before every attempt, retries included
+
+var ErrMaxRetriesExceeded error
+```
+
+Non-idempotent requests are retried on `429` only, unless `WithRetryNonIdempotent` is set.
+
+### Do / DoResponse
+
+`probe` package. Send a request and read the whole response, with the body capped in memory.
+
+```go
+const DefaultMaxBodySize = 10 << 20 // 10 MiB
+
+type Response struct {
+  StatusCode int
+  Header     http.Header
+  Body       []byte
+  Duration   time.Duration
+  Truncated  bool // Body holds only the first bytes of a longer response
+}
+
+type DoOption func(*doConfig)
+func WithMaxBodySize(n int64) DoOption // n <= 0 means unlimited
+
+func DoResponse(ctx context.Context, client *http.Client, req *http.Request, opts ...DoOption) (Response, error)
+func Do(ctx context.Context, client *http.Client, req *http.Request) (statusCode int, header http.Header, body []byte, duration time.Duration, err error)
+```
+
+`Do` is `DoResponse` with the default cap and no truncation signal; prefer `DoResponse`.
+
+### CaptureSnapshot
+
+Sends the request returned by a `probe.RequestBuilder` via `probe.DoResponse` and returns the response as a `Snapshot`: status, headers, body (capped at `probe.DefaultMaxBodySize`, with `Truncated` set when cut), duration and `BodyHash`. The building block for a baseline — typically a request to a random, certainly-absent path, so a catch-all "soft 404" can be told apart from a real page with `CompareSimilarity`.
+
+```go
+func CaptureSnapshot(ctx context.Context, p *probe.Probe, build probe.RequestBuilder) (Snapshot, error)
+```
+
+### ProbeAndCompareBaseline
+
+Captures the request returned by a `probe.RequestBuilder` (see [CaptureSnapshot](#capturesnapshot)) and compares it against the baseline stored under `baselineID`. Useful for one-off probes (credential swaps, header/param tampering, auth-bypass checks) that don't need the full `NewBaselineCheck` wiring.
+
+```go
+func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID, comparators ...BaselineComparator) (Snapshot, bool, error)
+```
+
+With no comparators, only a change in status code counts as a deviation (`CompareStatusCode`). Otherwise every comparator is applied and the response deviates if any of them reports an observation, so comparators compose. Returns the captured `Snapshot` and whether it deviated. Building a `Result`/`Observation` from that is left to the caller.
+
+The baseline is read with `GetData[Snapshot]`; if none is stored, the zero `Snapshot` is compared.
 
 ### Check
 
@@ -249,10 +354,12 @@ A check to execute.
 ```go
 type Check struct {
   ID          CheckID
-  Scope       CheckScope
-  Timeout     time.Duration
+  Name        string
+  Description string
+  Link        string
+  Tags        []string
   DependsOn   []CheckID
-  Condition   Condition
+  Conditions  []Condition
 
   // Security metadata, mirrored from checkdef.CheckDef. Descriptive only;
   // read by the engine for run-time check selection (WithMinCVSSScore, ...).
@@ -262,34 +369,62 @@ type Check struct {
   CAPECID    string
   OWASP      string
 
-  Run         func(context.Context, Target) (Result, error)
-  RunResource func(context.Context, Target, Resource) (Result, error)
+  Skip SkipDecision
+
+  Scope       CheckScope
+  Run         CheckFunc
+  RunResource ResourceCheckFunc
 
   // Variants: run the same check once per variant, instead of Run/RunResource.
   Variants           []string
   VariantMode        VariantMode
   RunVariant         VariantCheckFunc
   RunResourceVariant VariantResourceCheckFunc
+
+  Timeout     time.Duration
+  Concurrency int
 }
+
+type CheckFunc func(ctx context.Context, target Target, store ResultStore) (Result, error)
+type ResourceCheckFunc func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error)
 ```
 
 **Fields:**
 - `ID`: Unique identifier (required)
-- `Scope`: `ScopeGlobal` or `ScopePerResource` (required)
-- `Timeout`: Max execution time (optional, no timeout if 0)
-- `DependsOn`: List of check IDs this depends on (optional)
-- `Condition`: Skip condition (optional)
+- `Name` / `Description` / `Link` / `Tags`: descriptive metadata (optional)
+- `DependsOn`: IDs of the checks that must finish first (optional)
+- `Conditions`: the check runs only if all of them are true (optional)
 - `CVSSVector` / `CVSSScore` / `CWEID` / `CAPECID` / `OWASP`: security metadata (optional), populated automatically when the check is built from a `CheckDef`; used by the metadata `RunOption`s below
+- `Skip`: a [`SkipDecision`](#skipdecision) evaluated before the check runs (optional)
+- `Scope`: `ScopeGlobal` (default) or `ScopePerResource`
 - `Run`: Function to run for global checks (required if `Scope == ScopeGlobal` and `Variants` is empty)
 - `RunResource`: Function to run for per-resource checks (required if `Scope == ScopePerResource` and `Variants` is empty)
 - `Variants`: Attempt variants of the same check (e.g. `alg: none` casings); when set, `RunVariant`/`RunResourceVariant` is used instead of `Run`/`RunResource`
 - `VariantMode`: `VariantsSequential` (default) or `VariantsParallel` — how `Variants` are executed
 - `RunVariant`: Function invoked once per variant (required if `Scope == ScopeGlobal` and `Variants` is non-empty)
 - `RunResourceVariant`: Function invoked once per variant, per resource (required if `Scope == ScopePerResource` and `Variants` is non-empty)
+- `Timeout`: Max execution time of each invocation of the run function — per resource for a per-resource check, and for the whole variant set (not each variant) when `Variants` is set. Falls back to the engine default (30s, see [`WithDefaultTimeout`](#withdefaulttimeout)) when `0`
+- `Concurrency`: Max resources run at once for this check; falls back to `WithMaxResourceConcurrency` when `0`
+
+**Per-resource results.** A `ScopePerResource` check is recorded once per resource. Read it back with `store.GetForResource(id, resourceID)`. `store.Get(id)`, and therefore `IfCheckPassed`, `IfCheckObserved`, `IfCheckSkipped`, `GetData` and `BaselineFromGlobalCheck`, do not see it — depend on a per-resource check's output through `GetForResource` (as `BaselineFromCheck` does), not through a condition.
+
+**Concurrency.** A check holds one slot of `WithMaxConcurrency` for as long as it runs, including while a per-resource check fans out, so up to `WithMaxConcurrency × WithMaxResourceConcurrency` resource invocations can be in flight at once.
+
+### SkipDecision
+
+Decides at run time whether a check, or one of its resources, is skipped. The zero value never skips.
+
+```go
+func SkipAlways(reason string) SkipDecision
+func SkipWhen(fn func(ctx context.Context, target Target, store ResultStore) string) SkipDecision
+func SkipResourceWhen(fn func(ctx context.Context, target Target, resource Resource, store ResultStore) string) SkipDecision
+```
+
+`fn` returns a non-empty reason to skip, or `""` to run. `SkipResourceWhen` is evaluated once per resource of a `ScopePerResource` check instead of once per check. See [Skip decisions](../guides/skip-decisions/).
 
 ### CheckDef
 
-`checkdef` package (`github.com/cerberauth/harnessx/checkdef`). Declarative metadata for a `Check` — everything except behavior — parsed from an embedded YAML, TOML, or JSON definition file instead of hand-assembled in Go. Kept out of the root package so the core engine has no third-party dependencies; only importers of `checkdef` pull in a YAML/TOML parser.
+`checkdef` package (`github.com/cerberauth/harnessx/checkdef`). Declarative metadata for a `Check` — everything except behavior — parsed from an embedded YAML, TOML, or JSON definition file instead of hand-assembled in Go. Kept out of the root package so the core engine does not depend on a YAML/TOML parser; only importers of `checkdef` compile one in.
 
 ```go
 type CheckDef struct {
@@ -308,6 +443,19 @@ type CheckDef struct {
 }
 
 func (d CheckDef) DependsOnIDs() []harnessx.CheckID
+
+// Copy-and-set helpers, each returning a modified CheckDef:
+func (d CheckDef) WithName(name string) CheckDef
+func (d CheckDef) WithDescription(description string) CheckDef
+func (d CheckDef) WithLink(link string) CheckDef
+func (d CheckDef) WithTags(tags ...string) CheckDef
+func (d CheckDef) WithDependsOn(ids ...string) CheckDef
+func (d CheckDef) WithCVSSVector(vector string) CheckDef
+func (d CheckDef) WithCVSSScore(score float64) CheckDef
+func (d CheckDef) WithCWEID(id string) CheckDef
+func (d CheckDef) WithCAPECID(id string) CheckDef
+func (d CheckDef) WithOWASP(owasp string) CheckDef
+func (d CheckDef) WithExtra(extra map[string]any) CheckDef
 
 func MustParseCheckDefYAML(pkg string, data []byte) CheckDef
 func MustParseCheckDefTOML(pkg string, data []byte) CheckDef
@@ -347,49 +495,90 @@ func NewVariantResourceCheck(def CheckDef, run harnessx.VariantResourceCheckFunc
 
 ### Condition
 
-A predicate that determines if a check should run.
+A predicate that determines if a check should run, evaluated against the results of earlier dependency levels. A check runs only if all of its `Conditions` are true.
 
 ```go
-type Condition interface {
-  Eval(context.Context, ResultStore) bool
-}
+type Condition func(store ResultStore) bool
 ```
 
 **Constructors:**
-- `IfCheckPassed(CheckID)` — run if check passed
-- `IfCheckObserved(CheckID)` — run if check produced at least one observation
-- `IfCheckSkipped(CheckID)` — run if check was skipped
+- `IfCheckPassed(CheckID)` — run if the check ran, was not skipped, returned no error and produced no observations
+- `IfCheckObserved(CheckID)` — run if the check produced at least one observation
+- `IfCheckSkipped(CheckID)` — run if the check was skipped
 - `All(...Condition)` — all conditions must be true
 - `Any(...Condition)` — at least one must be true
-- `Not(Condition)` — negate condition
+- `Not(Condition)` — negate a condition
+
+All three `IfCheck*` constructors are false when no result is recorded for the check, which includes any `ScopePerResource` check (see [Check](#check)).
 
 ### ResultStore
 
-Read-only view of check results. Available to reporters and conditions.
+Read-only view of the results recorded so far. Skip decisions, conditions and run functions receive a snapshot taken when their dependency level started, so they see the results of earlier levels only.
 
 ```go
 type ResultStore interface {
-  Get(CheckID) Result
-  All() map[CheckID]Result
+  Get(id CheckID) (Result, bool)                                // a global check's result
+  GetForResource(id CheckID, resourceID string) (Result, bool)  // a per-resource check's result for one resource
+  Observations() []Observation                                  // every observation so far, unordered
+  Resources() []Resource                                        // every resource discovered so far
 }
 ```
 
+### Result helpers
+
+```go
+func ResultData(id CheckID, data any) Result // Result carrying data
+func DataResult(data any) Result             // same without an ID; the engine sets CheckID anyway
+func Skip(id CheckID, reason string) Result  // a skipped Result
+
+func DataAs[T any](r Result) (T, bool)
+func GetData[T any](store ResultStore, id CheckID) (T, bool) // false for a missing result or a different type
+func ResourceDataAs[T any](resource Resource) (T, bool)
+```
+
+### StaticResultStore
+
+A `ResultStore` fixture for tests: seed the results a skip decision or condition should see without running the engine. `GetForResource` ignores `resourceID`, and `Resources()` is always empty.
+
+```go
+func NewStaticResultStore(results ...Result) *StaticResultStore // keyed by each Result's CheckID
+```
+
+### RunVariants
+
+Runs `fn` once per variant and merges the outcomes into one `Result`, the way the engine does for a check with `Variants`. For code that wraps variant checks outside the engine.
+
+```go
+func RunVariants(ctx context.Context, variants []string, mode VariantMode, fn func(context.Context, string) (Result, error)) Result
+```
+
+- `Attempts` holds one `Attempt` per variant, in the order of `variants`.
+- `Observations` and `Resources` are the attempts' slices concatenated in that order; an observation with an empty `Variant` gets its variant's name.
+- `Err` is the first non-nil attempt error in `variants` order (not completion order). A failing variant does not stop the others.
+- A panic in `fn` is recovered onto that attempt's `Err` as a `*ScanError`.
+- `Result.Data` is not set; each attempt's `Data` stays on its `Attempt`.
+
 ### ScanSummary
 
-Summary of scan results.
+Summary of scan results, returned by `Run` / `RunScenario` and passed to `Reporter.OnScanComplete`.
 
 ```go
 type ScanSummary struct {
-  Total   int
-  Passed  int
-  Failed  int
-  Skipped int
+  Target       Target
+  TotalChecks  int // scheduled checks; a per-resource check counts once
+  Executed     int // executions that did not fail; a per-resource check counts once per resource
+  Skipped      int
+  Failed       int // executions whose Result.Err is non-nil
+  Observations []Observation
+  Results      []Result // in completion order, not deterministic
+  Duration     time.Duration
+  Err          error
 }
 ```
 
 ### Reporter
 
-Callback interface for tracking scan progress.
+Callback interface for tracking scan progress. Checks of one dependency level run concurrently, so `OnCheckStart` and `OnCheckComplete` can be called from several goroutines at once; implementations must be safe for concurrent use.
 
 ```go
 type Reporter interface {
@@ -400,44 +589,67 @@ type Reporter interface {
 }
 ```
 
+A skipped check is reported with `OnCheckComplete` only, without a preceding `OnCheckStart`. A per-resource check is reported once per resource, with `resource` set.
+
 **Implementations:**
-- `NoopReporter` — does nothing (useful as default)
+- `reporters.NoopReporter` — does nothing (useful as a base to embed)
 - `reporters.OTelReporter` — emits spans and metrics via OpenTelemetry (`github.com/cerberauth/harnessx/reporters`)
+
+### ResourcePlanReporter
+
+Optional `Reporter` extension. A reporter that also implements it learns how many resources each `ScopePerResource` check fans out over — enough, together with `OnScanStart`'s `totalChecks`, to size a progress bar.
+
+```go
+type ResourcePlanReporter interface {
+  OnResourcesDiscovered(check Check, resources int)
+}
+```
+
+Called once per per-resource check, just before its first run; not called when the check is skipped for lack of resources. Calls may overlap with each other and with other `Reporter` methods.
 
 ### OTelReporter
 
 ```go
 // reporters sub-package
-func NewOTelReporter(ctx context.Context, tracer trace.Tracer, meter metric.Meter, opts ...OTelOption) *OTelReporter
+func NewOTelReporter(ctx context.Context, tracer trace.Tracer, meter metric.Meter, opts ...OTelOption) (*OTelReporter, error)
 
 type OTelOption func(*otelConfig)
 
 func WithPrefix(prefix string) OTelOption
 ```
 
-Metrics: `{prefix}.check.duration`, `{prefix}.check.executions`, `{prefix}.observations`, `{prefix}.scan.duration` (default prefix: `"harnessx"`).
+Metrics: `{prefix}.check.duration`, `{prefix}.check.executions`, `{prefix}.observations`, `{prefix}.scan.duration` (default prefix: `"harnessx"`). `NewOTelReporter` returns an error if an instrument cannot be created.
+
+Spans are keyed by check and resource, so use one reporter per concurrent scan; sharing one between simultaneous runs of the same check can mix up their spans.
 
 ### ScanError
 
-Error returned by `Engine.Run()`.
+Records a failed check — typically a recovered panic — and is stored in `Result.Err`.
 
 ```go
 type ScanError struct {
-  Err error // Underlying error
+  CheckID CheckID
+  Cause   error
 }
 
-// Common error types:
+func (e *ScanError) Error() string
+func (e *ScanError) Unwrap() error
+```
+
+**Sentinel errors**, returned (usually wrapped with the offending check ID) by `Engine.Run` and `Engine.RunScenario`; test with `errors.Is`:
+
+```go
 var (
-  ErrCycleDetected      // Circular dependency found
-  ErrDuplicateCheckID   // Two checks have same ID
-  ErrUnknownDependency  // Dependency not registered
-  ErrNoChecks           // No checks registered
+  ErrCycleDetected     // circular dependency found
+  ErrDuplicateCheckID  // two checks have the same ID
+  ErrUnknownDependency // dependency not registered (or removed by WithExclude)
+  ErrNoChecks          // no check left to run
 )
 ```
 
 ### Engine
 
-Main orchestration engine.
+Main orchestration engine. Safe for concurrent `Run` / `RunScenario` calls, including a `RunScenario` issued from inside a check on the same engine.
 
 ```go
 type Engine struct {
@@ -454,6 +666,8 @@ Create a new engine.
 ```go
 func New(opts ...Option) *Engine
 ```
+
+Checks passed with `WithChecks` are registered immediately, but `New` cannot report a registration error such as a duplicate ID — use `Register` when you need to see one.
 
 **Example:**
 ```go
@@ -472,9 +686,9 @@ func (e *Engine) Register(checks ...Check) error
 ```
 
 **Returns:**
-- `ErrDuplicateCheckID` if a check with the same ID exists
-- `ErrCycleDetected` if adding the check would create a cycle
-- `ErrUnknownDependency` if a dependency doesn't exist
+- `ErrDuplicateCheckID`, wrapped with the ID, if a check with the same ID is already registered or repeated in `checks`. Checks listed before the duplicate stay registered.
+
+Unknown dependencies and cycles are not detected here; they are reported by `Run`.
 
 **Example:**
 ```go
@@ -493,9 +707,12 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 ```
 
 **Returns:**
-- `ScanSummary` with counts of passed, failed, skipped
-- `ScanError` on validation failure or check panic
-- `ErrUnknownDependency` if `WithOnly`/`WithExclude` drops a check another registered check depends on
+- `ScanSummary` with counts of executed, failed and skipped checks. It is returned alongside any error, and `Reporter.OnScanComplete` is always called.
+- `ErrNoChecks` if no check is left to run
+- `ErrDuplicateCheckID`, `ErrUnknownDependency` or `ErrCycleDetected` for an invalid graph — including `ErrUnknownDependency` if `WithOnly`/`WithExclude` drops a check another selected check depends on
+- the context's error if `ctx` is cancelled
+
+A failing or panicking check does not make `Run` return an error: it is counted in `ScanSummary.Failed` and its error is on its `Result`.
 
 **Example:**
 ```go
@@ -511,6 +728,25 @@ summary, err = engine.Run(ctx, target, harnessx.WithOnly("auth-check", "schema-c
 // Run everything except these.
 summary, err = engine.Run(ctx, target, harnessx.WithExclude("slow-check"))
 ```
+
+#### RunScenario
+
+Execute the checks of a `Scenario` instead of the registered ones, using the engine's concurrency limits and default timeout. It neither reads nor changes the engine's registered checks. `RunOption`s narrow `scenario.Checks` exactly as they narrow registered checks in `Run`.
+
+```go
+func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario, opts ...RunOption) (ScanSummary, error)
+
+type Scenario struct {
+  ID          string
+  Name        string
+  Description string
+  Tags        []string
+  Checks      []Check
+  Reporters   []Reporter // when non-empty, used instead of the engine's reporters for this call
+}
+```
+
+See [Scenarios](../guides/scenarios/).
 
 ## Run Options
 
@@ -544,10 +780,16 @@ func WithMinCVSSScore(min float64) RunOption      // CVSSScore >= min
 func WithMaxCVSSScore(max float64) RunOption      // CVSSScore <= max
 func WithCVSSScoreRange(min, max float64) RunOption
 
-func WithCVSSVector(vectors ...string) RunOption  // exact match, any of
+func WithCVSSVector(vectors ...string) RunOption  // case-insensitive, any of
 func WithCWEID(ids ...string) RunOption           // case-insensitive, any of
 func WithCAPECID(ids ...string) RunOption         // case-insensitive, any of
 func WithOWASP(ids ...string) RunOption           // case-insensitive, any of
+```
+
+`FilterChecks` applies run options to a slice of checks the way `Run` does and returns the checks that would run, dependencies included:
+
+```go
+func FilterChecks(checks []Check, opts ...RunOption) []Check
 ```
 
 ```go
@@ -565,33 +807,53 @@ summary, err := engine.Run(ctx, target,
 
 ### WithMaxConcurrency
 
-Set max concurrent checks per level.
+Set max concurrent checks per dependency level. The limit applies to each `Run` / `RunScenario` call separately; it is not shared across calls on the same engine.
 
 ```go
 func WithMaxConcurrency(n int) Option
 ```
 
-**Default:** `1` (sequential execution)
+**Default:** `runtime.NumCPU()`. Non-positive values are ignored.
 
 ### WithMaxResourceConcurrency
 
-Set max concurrent per-resource checks.
+Set max concurrent resources per per-resource check. `Check.Concurrency` overrides it for one check.
 
 ```go
 func WithMaxResourceConcurrency(n int) Option
 ```
 
-**Default:** `1` (sequential execution)
+**Default:** `runtime.NumCPU()`. Non-positive values are ignored.
+
+A per-resource check keeps its `WithMaxConcurrency` slot while it fans out, so up to `WithMaxConcurrency × WithMaxResourceConcurrency` resource invocations can run at once.
 
 ### WithReporters
 
-Set one or more reporter callbacks. Multiple reporters are automatically fanned out.
+Set one or more reporters. They are used by `Run`, and by `RunScenario` calls whose `Scenario.Reporters` is empty. Every reporter receives every callback.
 
 ```go
 func WithReporters(reporters ...Reporter) Option
 ```
 
-**Default:** `NoopReporter()` if no reporters provided
+**Default:** no reporters.
+
+### WithDefaultTimeout
+
+Set the timeout applied to checks that leave `Check.Timeout` at zero.
+
+```go
+func WithDefaultTimeout(d time.Duration) Option
+```
+
+**Default:** `30s`. Non-positive values are ignored.
+
+### WithChecks
+
+Register checks when the engine is created. A registration error is not reported; use `Register` to see one.
+
+```go
+func WithChecks(checks ...Check) Option
+```
 
 ## Execution Flow
 
@@ -610,15 +872,15 @@ func WithReporters(reporters ...Reporter) Option
 
 ### Panics
 
-If a check panics, the panic is recovered and recorded as a `ScanError`. The scan continues.
+If a check panics, the panic is recovered and recorded as a `*ScanError` on that check's `Result.Err` (and, for a variant, on its `Attempt.Err`). The check counts as failed and the scan continues; `Run` does not return an error for it.
 
 ### Timeouts
 
-If a check exceeds its timeout, it returns `context.DeadlineExceeded`. The check fails but the scan continues.
+Each invocation of a check's run function gets its own timeout: `Check.Timeout`, or the engine default when zero. The context passed to the function is cancelled when it expires; a function that honours it and returns `ctx.Err()` fails with `context.DeadlineExceeded`, and the scan continues. A check with `Variants` shares one timeout across all its variants.
 
 ### Context Cancellation
 
-If the root context is canceled, all running checks are canceled. The scan returns the context error.
+If the root context is canceled, running checks are canceled and no further level starts. The scan returns the context error alongside the partial `ScanSummary`.
 
 ## Common Patterns
 
@@ -638,18 +900,16 @@ if summary.Failed > 0 {
 ### Collect observations
 
 ```go
-type Collector struct {
-  observations []Observation
+summary, err := engine.Run(ctx, target)
+if err != nil {
+  return err
 }
-
-func (c *Collector) OnCheckComplete(checkID string, result Result) {
-  if len(result.Observations) > 0 {
-    c.observations = append(c.observations, result.Observations...)
-  }
+for _, o := range summary.Observations {
+  fmt.Printf("%s: %s\n", o.CheckID, o.Title)
 }
-
-// ... use with engine
 ```
+
+Or, to stream them as checks finish, implement `Reporter.OnCheckComplete` (guarding shared state with a mutex, since checks run concurrently).
 
 ### Timeout entire scan
 

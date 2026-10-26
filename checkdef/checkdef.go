@@ -2,9 +2,8 @@
 // description, dependencies, ...) out of an embedded definition file, so a
 // reusable check package can keep that metadata in YAML/TOML/JSON instead
 // of hand-assembling it in Go. It's a separate package from the root
-// harnessx module so the core engine keeps its zero-dependency guarantee —
-// only importers that actually parse definition files pull in a YAML/TOML
-// parser.
+// harnessx package so the core engine does not depend on a YAML/TOML parser —
+// only importers that actually parse definition files compile one in.
 package checkdef
 
 import "github.com/cerberauth/harnessx"

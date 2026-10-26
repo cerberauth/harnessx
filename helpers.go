@@ -1,5 +1,6 @@
 package harnessx
 
+// ResultData returns a Result for check id that carries data.
 func ResultData(id CheckID, data any) Result {
 	return Result{CheckID: id, Data: data}
 }
@@ -11,15 +12,20 @@ func DataResult(data any) Result {
 	return Result{Data: data}
 }
 
+// Skip returns a Result for check id that is skipped with reason.
 func Skip(id CheckID, reason string) Result {
 	return Result{CheckID: id, Skipped: true, SkipReason: reason}
 }
 
+// DataAs returns r.Data as a T, and whether it was one.
 func DataAs[T any](r Result) (T, bool) {
 	v, ok := r.Data.(T)
 	return v, ok
 }
 
+// GetData returns the Data of the result recorded for check id as a T. It
+// reports false if there is no such result — which includes any
+// ScopePerResource check, see ResultStore — or its Data is not a T.
 func GetData[T any](store ResultStore, id CheckID) (T, bool) {
 	r, ok := store.Get(id)
 	if !ok {
@@ -29,6 +35,7 @@ func GetData[T any](store ResultStore, id CheckID) (T, bool) {
 	return DataAs[T](r)
 }
 
+// ResourceDataAs returns resource.Data as a T, and whether it was one.
 func ResourceDataAs[T any](resource Resource) (T, bool) {
 	v, ok := resource.Data.(T)
 	return v, ok

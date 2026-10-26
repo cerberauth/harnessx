@@ -9,7 +9,7 @@ import { Steps, Aside } from '@/components/docs'
 
 ## Requirements
 
-- **Go 1.22** or later
+- **Go 1.26** or later
 
 ## Install with go get
 
@@ -36,9 +36,12 @@ import { Steps, Aside } from '@/components/docs'
 
 </Steps>
 
-## Zero dependencies
+## Dependencies
 
-harnessx uses only the Go standard library. No external packages are required at runtime or build time.
+The root `harnessx` package and `probe` depend only on the Go standard library and `golang.org/x/time` (the rate limiter). Third-party parsers and SDKs are compiled in only if you import the package that needs them:
+
+- `checkdef` — YAML and TOML parsers
+- `reporters` — OpenTelemetry API
 
 ## Next steps
 

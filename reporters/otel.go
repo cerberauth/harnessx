@@ -18,6 +18,9 @@ type spanKey struct {
 	resourceID string
 }
 
+// OTelReporter is a harnessx.Reporter that emits an OpenTelemetry span per
+// check execution and records check and scan metrics. Build one with
+// NewOTelReporter.
 type OTelReporter struct {
 	baseCtx     context.Context
 	tracer      trace.Tracer
@@ -30,18 +33,28 @@ type OTelReporter struct {
 	scanDuration       metric.Float64Histogram
 }
 
+// OTelOption configures an OTelReporter; see NewOTelReporter.
 type OTelOption func(*otelConfig)
 
 type otelConfig struct {
 	prefix string
 }
 
+// WithPrefix sets the prefix of the metric names, "harnessx" by default, as in
+// "harnessx.check.duration".
 func WithPrefix(prefix string) OTelOption {
 	return func(c *otelConfig) {
 		c.prefix = prefix
 	}
 }
 
+// NewOTelReporter returns an OTelReporter that starts spans with tracer and
+// records metrics with meter, both under ctx. It returns an error if a metric
+// instrument cannot be created.
+//
+// Spans are keyed by check and resource, so use one reporter per concurrent
+// scan: sharing it between simultaneous runs of the same check can mix up their
+// spans.
 func NewOTelReporter(ctx context.Context, tracer trace.Tracer, meter metric.Meter, opts ...OTelOption) (*OTelReporter, error) {
 	cfg := &otelConfig{prefix: "harnessx"}
 	for _, opt := range opts {

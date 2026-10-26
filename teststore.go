@@ -7,6 +7,8 @@ type StaticResultStore struct {
 	results map[CheckID]Result
 }
 
+// NewStaticResultStore returns a StaticResultStore seeded with results, keyed by
+// each Result's CheckID.
 func NewStaticResultStore(results ...Result) *StaticResultStore {
 	s := &StaticResultStore{results: make(map[CheckID]Result, len(results))}
 	for _, r := range results {

@@ -26,8 +26,8 @@ import { Card, CardGrid, LinkCard } from '@/components/docs'
   <Card title="Two Execution Scopes" icon="approve-check">
     Run once globally or fan out over discovered resources. Mix both in one scan.
   </Card>
-  <Card title="Zero Dependencies" icon="puzzle">
-    Pure Go standard library. No external runtime dependencies to manage.
+  <Card title="Minimal Dependencies" icon="puzzle">
+    The core needs only the standard library and a rate limiter. YAML, TOML and OpenTelemetry are compiled in only when you import them.
   </Card>
   <Card title="Bounded Concurrency" icon="rocket">
     Configurable level-wide and per-resource semaphores. Full context propagation.

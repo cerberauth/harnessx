@@ -94,24 +94,26 @@ engine.Register(checkA1, checkA2)
 
 ## Accessing prior results
 
-To use the result of a dependency, access it from the result store via a `Reporter`:
+A check receives a `ResultStore` holding the results of the levels before it. Read a dependency's result from it:
 
 ```go
-type ScanReporter struct {
-  results harnessx.ResultStore
+checkB := harnessx.Check{
+  ID:        "b",
+  Scope:     harnessx.ScopeGlobal,
+  DependsOn: []harnessx.CheckID{"a"},
+  Run: func(ctx context.Context, target harnessx.Target, store harnessx.ResultStore) (harnessx.Result, error) {
+    // Typed access to the Data check "a" returned
+    token, ok := harnessx.GetData[string](store, "a")
+    if !ok {
+      return harnessx.Skip("b", "check a produced no token"), nil
+    }
+    // ... use token
+    return harnessx.Result{}, nil
+  },
 }
-
-func (r *ScanReporter) OnCheckStart(checkID string) {
-  // Before running check with dependencies, results are available
-  if checkID == "b" {
-    // Access result of check "a"
-    resultA := r.results.Get("a")
-    println("Check A result:", resultA.Passed)
-  }
-}
-
-engine := harnessx.New(harnessx.WithReporters(&ScanReporter{}))
 ```
+
+`store.Get("a")` returns the whole `Result`. The results of a per-resource check are recorded per resource and read with `store.GetForResource(id, resourceID)`; `Get` and `GetData` do not find them.
 
 ## Best practices
 
