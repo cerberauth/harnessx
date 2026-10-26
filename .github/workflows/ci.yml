@@ -27,3 +27,43 @@ jobs:
         with:
           codecov-token: ${{ secrets.CODECOV_TOKEN }}
           exclude: "/examples/"
+
+  race:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Vet (including examples)
+        run: go vet ./...
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+  fuzz:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Fuzz
+        run: |
+          go test ./probe -run '^$' -fuzz '^FuzzRetryAfterDuration$' -fuzztime 20s
+          go test . -run '^$' -fuzz '^FuzzSimHash$' -fuzztime 20s
+          go test ./checkdef -run '^$' -fuzz '^FuzzMustParseCheckDefYAML$' -fuzztime 20s
+          go test ./checkdef -run '^$' -fuzz '^FuzzMustParseCheckDefJSON$' -fuzztime 20s
+          go test ./checkdef -run '^$' -fuzz '^FuzzMustParseCheckDefTOML$' -fuzztime 20s

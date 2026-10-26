@@ -267,21 +267,31 @@ func snapshotBody(req *http.Request) ([]byte, error) {
 	return data, nil
 }
 
+// maxRetryWait caps every wait between retries, whether computed locally or
+// requested by the server.
+const maxRetryWait = 60 * time.Second
+
 // retryAfterDuration returns how long to wait before the next retry attempt.
 // It parses response headers in priority order:
 //  1. Retry-After: <integer seconds>
 //  2. Retry-After: <HTTP-date>
 //  3. X-RateLimit-Reset: <unix timestamp>
 //  4. Exponential backoff with full jitter
+//
+// Server-supplied waits are capped at maxRetryWait so a hostile or buggy
+// server cannot stall a check.
 func retryAfterDuration(resp *http.Response, base time.Duration, attempt int) time.Duration {
 	if h := resp.Header.Get("Retry-After"); h != "" {
 		if secs, err := strconv.ParseInt(h, 10, 64); err == nil && secs > 0 {
+			if secs >= int64(maxRetryWait/time.Second) {
+				return maxRetryWait
+			}
 			return time.Duration(secs) * time.Second
 		}
 		for _, layout := range []string{http.TimeFormat, time.RFC850, time.ANSIC} {
 			if t, err := time.Parse(layout, h); err == nil {
 				if d := time.Until(t); d > 0 {
-					return d
+					return min(d, maxRetryWait)
 				}
 				return 0
 			}
@@ -291,7 +301,7 @@ func retryAfterDuration(resp *http.Response, base time.Duration, attempt int) ti
 	if h := resp.Header.Get("X-RateLimit-Reset"); h != "" {
 		if ts, err := strconv.ParseInt(h, 10, 64); err == nil {
 			if d := time.Until(time.Unix(ts, 0)); d > 0 {
-				return d
+				return min(d, maxRetryWait)
 			}
 			return 0
 		}
@@ -306,9 +316,8 @@ func backoffDuration(base time.Duration, attempt int) time.Duration {
 	if base <= 0 {
 		base = defaultRetryDelay
 	}
-	slot := base * (1 << min(attempt, 10))
-	const maxSlot = 60 * time.Second
-	slot = min(slot, maxSlot)
+	slot := base * (1 << min(max(attempt, 0), 10))
+	slot = min(slot, maxRetryWait)
 	n, err := rand.Int(rand.Reader, big.NewInt(int64(slot)+1))
 	if err != nil {
 		return slot
