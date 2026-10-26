@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"strconv"
+	"syscall"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -34,6 +36,8 @@ type config struct {
 	retryDelay time.Duration
 	transport  http.RoundTripper
 	timeout    time.Duration
+
+	checkRedirect func(req *http.Request, via []*http.Request) error
 
 	retryNonIdempotent bool
 	limiter            *rate.Limiter
@@ -88,14 +92,38 @@ func WithTransport(t http.RoundTripper) Option {
 	}
 }
 
-// WithTimeout sets the timeout on the *http.Client returned by Client().
-// It has no effect on the underlying transport.
+// WithTimeout sets the timeout on the *http.Client returned by Client(); the
+// default is 30 seconds. Zero disables the client timeout, and a negative value
+// is ignored. It has no effect on the underlying transport.
+//
+// The timeout covers a whole request as the caller sees it: every retry attempt,
+// the backoff sleeps between them and any Retry-After wait, plus reading the
+// response body. Size it for the worst case, or bound the request with a
+// context instead.
 func WithTimeout(d time.Duration) Option {
 	return func(c *config) {
-		if d > 0 {
+		if d >= 0 {
 			c.timeout = d
 		}
 	}
+}
+
+// WithCheckRedirect sets the redirect policy of the *http.Client returned by
+// Client(), with the semantics of http.Client.CheckRedirect. By default the
+// client follows up to 10 redirects, which is rarely what a scanner wants: it
+// hides the 3xx response and can send the request to another host.
+func WithCheckRedirect(fn func(req *http.Request, via []*http.Request) error) Option {
+	return func(c *config) {
+		c.checkRedirect = fn
+	}
+}
+
+// WithNoRedirects makes the *http.Client returned by Client() return 3xx
+// responses as they are instead of following them.
+func WithNoRedirects() Option {
+	return WithCheckRedirect(func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	})
 }
 
 // WithRetryNonIdempotent allows retrying non-idempotent requests (e.g. POST,
@@ -145,9 +173,19 @@ func New(opts ...Option) *Probe {
 // injection — for any HTTP method.
 func (p *Probe) Client() *http.Client {
 	return &http.Client{
-		Transport: p,
-		Timeout:   p.cfg.timeout,
+		Transport:     p,
+		Timeout:       p.cfg.timeout,
+		CheckRedirect: p.cfg.checkRedirect,
 	}
+}
+
+// Do sends req through Client(), so that a *Probe can be used wherever a Doer is
+// expected. It returns an error, rather than panicking, on a nil *Probe.
+func (p *Probe) Do(req *http.Request) (*http.Response, error) {
+	if p == nil {
+		return nil, errors.New("probe: nil Probe")
+	}
+	return p.Client().Do(req)
 }
 
 // RoundTrip implements http.RoundTripper. It injects the default User-Agent
@@ -163,6 +201,12 @@ func (p *Probe) Client() *http.Client {
 // 429, where the server did not process them. Network errors and 503 responses
 // are returned immediately, unless the request carries an Idempotency-Key
 // header or WithRetryNonIdempotent is set.
+//
+// Only transient network errors are retried: timeouts, connection reset,
+// refused or aborted, a broken pipe, an unexpected EOF, and temporary DNS
+// failures. Permanent ones — an unknown host, a TLS certificate that does not
+// verify, an unsupported scheme — are returned at once instead of being retried
+// maxRetries times.
 //
 // It never returns both a response and an error. When the final attempt still
 // answers 429/503, that response is returned unread with a nil error so the
@@ -205,7 +249,7 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			if !retryUnsafe {
+			if !retryUnsafe || !isTransientError(err) {
 				return nil, err
 			}
 			lastErr = err
@@ -239,6 +283,30 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return nil, fmt.Errorf("%w: %w", ErrMaxRetriesExceeded, lastErr)
+}
+
+// isTransientError reports whether err is a network failure worth retrying: one
+// that a later attempt can plausibly get past. Anything unrecognised is treated
+// as permanent so that, for example, a TLS verification failure or an unknown
+// host is not retried maxRetries times.
+func isTransientError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsTimeout || dnsErr.IsTemporary
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	for _, errno := range []error{syscall.ECONNRESET, syscall.ECONNREFUSED, syscall.ECONNABORTED, syscall.EPIPE} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
 }
 
 // isIdempotent reports whether req may be safely sent more than once: its

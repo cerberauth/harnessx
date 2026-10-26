@@ -72,7 +72,9 @@ func TestCompareSimilarity(t *testing.T) {
 		{"both empty", 0.9, snap(200, ""), snap(200, ""), false},
 		{"empty vs content", 0.9, snap(200, ""), snap(200, realPage), true},
 		{"threshold zero never flags body", 0, snap(200, missing), snap(200, realPage), false},
-		{"threshold above one flags everything", 1.01, snap(200, missing), snap(200, missing), true},
+		{"threshold above one is clamped to one", 1.01, snap(200, missing), snap(200, missing), false},
+		{"threshold above one still flags a different page", 5, snap(200, missing), snap(200, realPage), true},
+		{"negative threshold is clamped to zero", -3, snap(200, missing), snap(200, realPage), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -234,4 +236,41 @@ func TestProbeAndCompareBaseline_ComparatorsCompose(t *testing.T) {
 	if !vulnerable {
 		t.Error("any comparator flagging should mark the response as deviating")
 	}
+}
+
+func TestCompareStatusAndLength_SkipsLengthWhenTruncated(t *testing.T) {
+	full := snap(200, strings.Repeat("a", 100))
+	short := snap(200, strings.Repeat("a", 10))
+
+	if obs := CompareStatusAndLength(0.1)(full, short); len(obs) == 0 {
+		t.Fatal("test needs a length deviation to start from")
+	}
+	for name, pair := range map[string][2]Snapshot{
+		"baseline truncated": {withTruncated(full), short},
+		"current truncated":  {full, withTruncated(short)},
+	} {
+		if obs := CompareStatusAndLength(0.1)(pair[0], pair[1]); len(obs) != 0 {
+			t.Errorf("%s: got %v, want the length comparison skipped", name, obs)
+		}
+	}
+	if obs := CompareStatusAndLength(0.1)(withTruncated(snap(404, "x")), withTruncated(snap(200, "x"))); len(obs) != 1 {
+		t.Errorf("a status change must still be flagged on truncated bodies, got %v", obs)
+	}
+}
+
+func TestCompareSimilarity_MentionsTruncation(t *testing.T) {
+	a := withTruncated(snap(200, "alpha beta gamma delta epsilon zeta eta theta"))
+	b := snap(200, "completely unrelated words appear here instead")
+	obs := CompareSimilarity(0.99)(a, b)
+	if len(obs) != 1 || !strings.Contains(obs[0].Description, "truncated") {
+		t.Errorf("observations = %v, want one that mentions truncation", obs)
+	}
+	if obs := CompareSimilarity(0.99)(snap(200, "alpha beta"), snap(200, "gamma delta")); len(obs) != 1 || strings.Contains(obs[0].Description, "truncated") {
+		t.Errorf("observations = %v, want one that does not mention truncation", obs)
+	}
+}
+
+func withTruncated(s Snapshot) Snapshot {
+	s.Truncated = true
+	return s
 }

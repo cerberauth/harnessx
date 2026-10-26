@@ -17,11 +17,16 @@ const titleBaselineDeviation = "Response deviates from baseline"
 // body only an empty current body is within tolerance.
 //
 // Length is len(Snapshot.Body), so it is capped by the probe's body size limit.
+// When either snapshot is Truncated its length is not the response's length, so
+// the length check is skipped and only the status code is compared.
 func CompareStatusAndLength(tolerance float64) BaselineComparator {
 	tolerance = math.Max(tolerance, 0)
 	return func(baseline, current Snapshot) []Observation {
 		if baseline.StatusCode != current.StatusCode {
 			return statusDeviation(baseline, current)
+		}
+		if baseline.Truncated || current.Truncated {
+			return nil
 		}
 		bl, cl := float64(len(baseline.Body)), float64(len(current.Body))
 		if math.Abs(cl-bl) > tolerance*bl {
@@ -36,14 +41,18 @@ func CompareStatusAndLength(tolerance float64) BaselineComparator {
 
 // CompareSimilarity returns a BaselineComparator that flags a change in
 // status code, or a body whose similarity to the baseline's falls below
-// threshold (0..1, 1 meaning identical). Similarity is 1 minus the normalised
+// threshold (0..1, 1 meaning identical; values outside that range are clamped
+// to it). Similarity is 1 minus the normalised
 // Hamming distance between the SimHash of the two bodies (see SimHash), so
 // near-identical pages — such as a catch-all "not found" page that echoes the
 // requested path — score high while a genuinely different page scores low.
 // A typical threshold is 0.8–0.95.
 //
 // If a Snapshot carries a non-zero BodyHash it is used instead of hashing Body.
+// When either snapshot is Truncated the similarity is that of the captured
+// prefixes, and a reported deviation says so.
 func CompareSimilarity(threshold float64) BaselineComparator {
+	threshold = math.Min(math.Max(threshold, 0), 1)
 	return func(baseline, current Snapshot) []Observation {
 		if baseline.StatusCode != current.StatusCode {
 			return statusDeviation(baseline, current)
@@ -52,10 +61,11 @@ func CompareSimilarity(threshold float64) BaselineComparator {
 		if sim >= threshold {
 			return nil
 		}
-		return []Observation{{
-			Title:       titleBaselineDeviation,
-			Description: fmt.Sprintf("body similarity to baseline was %.2f, below threshold %.2f", sim, threshold),
-		}}
+		desc := fmt.Sprintf("body similarity to baseline was %.2f, below threshold %.2f", sim, threshold)
+		if baseline.Truncated || current.Truncated {
+			desc += " (a body was truncated, so this compares only the captured part)"
+		}
+		return []Observation{{Title: titleBaselineDeviation, Description: desc}}
 	}
 }
 

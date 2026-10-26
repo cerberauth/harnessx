@@ -319,7 +319,7 @@ func NewCaptureGlobalBaselineCheck(cfg CaptureGlobalBaselineCheckConfig) Check
 // probe package: build a request, then apply named mutators (WithBearerToken,
 // WithBasicAuth, WithAPIKeyHeader, WithAPIKeyQuery, WithAuthCookie, WithFormCredential, ...).
 func NewRequest(ctx context.Context, method, target string, body io.Reader, mutators ...probe.RequestMutator) (*http.Request, error)
-func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error)
+func ProbeAndCompareBaseline(ctx context.Context, client probe.Doer, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error)
 ```
 
 - The baseline comes from a **baseline probe** (`NewCaptureBaselineCheck` + `BaselineFromCheck`) captured at runtime, or is **defined manually** (`StaticBaseline`, or `BaselineFromResource` reading `Resource.Data` set at discovery time).
