@@ -6,7 +6,14 @@
 // only importers that actually parse definition files compile one in.
 package checkdef
 
-import "github.com/cerberauth/harnessx"
+import (
+	"errors"
+	"fmt"
+	"math"
+	"strings"
+
+	"github.com/cerberauth/harnessx"
+)
 
 // CheckDef mirrors the descriptive fields of harnessx.Check (everything
 // except behavior — Skip, Run, RunResource, Scope, Timeout, Concurrency).
@@ -28,6 +35,35 @@ type CheckDef struct {
 	// YAML/TOML/JSON (none of the three parsers support catch-all/inline
 	// remainder maps consistently).
 	Extra map[string]any `yaml:"extra" toml:"extra" json:"extra"`
+}
+
+// Validate reports every problem that would make d unusable as a check: an
+// empty ID, a CVSSScore outside [0, 10], an empty or self-referencing
+// depends_on entry, or an empty tag. It returns nil for a valid definition. The
+// Parse* functions call it, so a definition file is checked as it is loaded.
+func (d CheckDef) Validate() error {
+	var errs []error
+	if strings.TrimSpace(d.ID) == "" {
+		errs = append(errs, errors.New("id is required"))
+	}
+	if math.IsNaN(d.CVSSScore) || d.CVSSScore < 0 || d.CVSSScore > 10 {
+		errs = append(errs, fmt.Errorf("cvss_score %v is outside [0, 10]", d.CVSSScore))
+	}
+	for _, dep := range d.DependsOn {
+		switch {
+		case strings.TrimSpace(dep) == "":
+			errs = append(errs, errors.New("depends_on has an empty entry"))
+		case dep == d.ID:
+			errs = append(errs, fmt.Errorf("depends_on lists the check itself (%q)", dep))
+		}
+	}
+	for _, tag := range d.Tags {
+		if strings.TrimSpace(tag) == "" {
+			errs = append(errs, errors.New("tags has an empty entry"))
+			break
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // DependsOnIDs converts DependsOn to []harnessx.CheckID for direct use in

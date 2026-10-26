@@ -47,7 +47,7 @@ var def = checkdef.MustParseCheckDefYAML("algnone", checkYAML)
 var Check = checkdef.NewCheck(def, run) // Scope: ScopeGlobal, ID/Name/.../DependsOn wired from def
 ```
 
-`MustParseCheckDefYAML` / `MustParseCheckDefTOML` / `MustParseCheckDefJSON` each panic (prefixed with the given `pkg` name) on malformed input, since definitions are normally parsed once at `init()` time — a bad definition file is a build-time bug, not a runtime error.
+`MustParseCheckDefYAML` / `MustParseCheckDefTOML` / `MustParseCheckDefJSON` each panic (prefixed with the given `pkg` name) on malformed or invalid input — including an unknown key, so a typo like `depend_on` cannot silently drop a field. Use `ParseCheckDefYAML` / `ParseCheckDefTOML` / `ParseCheckDefJSON` to get an error instead. Definitions are normally parsed once at `init()` time, so a bad definition file is a build-time bug, not a runtime error.
 
 `NewCheck` (`ScopeGlobal`) and `NewResourceCheck` (`ScopePerResource`) turn a `CheckDef` plus a run function into a `harnessx.Check` without hand-copying every metadata field. `WithSkip`, `WithConditions`, `WithTimeout`, and `WithConcurrency` set the remaining optional `Check` fields via functional options:
 
