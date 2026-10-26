@@ -265,3 +265,125 @@ func TestBaselineChecks_MisconfiguredReturnErrorInsteadOfPanicking(t *testing.T)
 		}
 	}
 }
+
+func TestStaticResultStore_FallbackAndOrdering(t *testing.T) {
+	store := NewStaticResultStore(
+		Result{CheckID: "b", ResourceID: "r2", Observations: []Observation{{Title: "b-r2"}}},
+		Result{CheckID: "b", ResourceID: "r1", Observations: []Observation{{Title: "b-r1"}}},
+		Result{CheckID: "a", ResourceID: "r1", Observations: []Observation{{Title: "a-r1"}}},
+		Result{CheckID: "g", Observations: []Observation{{Title: "g"}}},
+	)
+
+	observations := store.Observations()
+	got := make([]string, 0, len(observations))
+	for _, o := range observations {
+		got = append(got, o.Title)
+	}
+	if want := []string{"g", "a-r1", "b-r1", "b-r2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Observations = %v, want global results first, then per-resource by check and resource: %v", got, want)
+	}
+
+	if r, ok := store.GetForResource("g", "anything"); !ok || r.Observations[0].Title != "g" {
+		t.Errorf("GetForResource(g, anything) = %+v, %v; want the check-wide result as a fallback", r, ok)
+	}
+	if _, ok := store.GetForResource("a", "r9"); ok {
+		t.Error("GetForResource(a, r9) = ok, want nothing: a has only per-resource results and none for r9")
+	}
+}
+
+func TestScanError_MessageAndUnwrap(t *testing.T) {
+	cause := errors.New("boom")
+	err := &ScanError{CheckID: "chk", Cause: cause}
+	if got := err.Error(); got != `harnessx: check "chk" failed: boom` {
+		t.Errorf("Error() = %q", got)
+	}
+	if !errors.Is(err, cause) {
+		t.Error("ScanError does not unwrap to its cause")
+	}
+}
+
+func TestNewCaptureBaselineCheck_CaptureErrorFailsTheResult(t *testing.T) {
+	boom := errors.New("capture failed")
+	_, err := NewCaptureBaselineCheck(CaptureBaselineCheckConfig{
+		ID: "c",
+		Capture: func(context.Context, Target, Resource, ResultStore) (Snapshot, error) {
+			return Snapshot{}, boom
+		},
+	}).RunResource(context.Background(), Target{}, Resource{}, NewStaticResultStore())
+	if !errors.Is(err, boom) {
+		t.Errorf("error = %v, want the capture error", err)
+	}
+}
+
+func TestRunVariants_ParallelLimitStopsWaitingOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	started := make(chan struct{})
+	var ran atomic.Int64
+	done := make(chan Result, 1)
+	go func() {
+		done <- runVariants(ctx, []string{"a", "b"}, VariantsParallel, variantLimits{concurrency: 1}, func(vctx context.Context, _ string) (Result, error) {
+			if ran.Add(1) == 1 {
+				close(started)
+			}
+			<-vctx.Done() // whichever variant got the only slot holds it until cancellation
+			return Result{}, nil
+		})
+	}()
+
+	<-started
+	cancel()
+	res := <-done
+
+	if got := ran.Load(); got != 1 {
+		t.Errorf("%d variants ran, want 1: the other was waiting for a slot", got)
+	}
+	cancelled := 0
+	for _, a := range res.Attempts {
+		if errors.Is(a.Err, context.Canceled) {
+			cancelled++
+		}
+	}
+	if cancelled != 1 {
+		t.Errorf("attempts = %+v, want exactly one recorded as cancelled", res.Attempts)
+	}
+}
+
+func TestEngine_LevelSlotWaitersAreRecordedOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	release := make(chan struct{})
+	e := New(WithMaxConcurrency(1))
+	if err := e.Register(
+		globalCheck("holder", nil, func(context.Context, Target, ResultStore) (Result, error) {
+			cancel()
+			<-release
+			return Result{}, nil
+		}),
+		globalCheck("waiter", nil, stubRun),
+	); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond) // let the waiter observe the cancellation
+		close(release)
+	}()
+
+	summary, err := e.Run(ctx, Target{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	if got := summary.Executed + summary.Skipped + summary.Failed; got != 2 {
+		t.Errorf("Executed+Skipped+Failed = %d, want 2: the check waiting for a slot must be recorded", got)
+	}
+}
+
+func TestEngine_RunScenarioRejectsDuplicateIDs(t *testing.T) {
+	_, err := New().RunScenario(context.Background(), Target{}, Scenario{Checks: []Check{
+		globalCheck("dup", nil, stubRun), globalCheck("dup", nil, stubRun),
+	}})
+	if !errors.Is(err, ErrDuplicateCheckID) {
+		t.Errorf("error = %v, want ErrDuplicateCheckID", err)
+	}
+}
