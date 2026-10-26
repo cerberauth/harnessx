@@ -175,6 +175,9 @@ func NewBaselineCheck(cfg BaselineCheckConfig) Check {
 		Timeout:     cfg.Timeout,
 		Concurrency: cfg.Concurrency,
 		RunResource: func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error) {
+			if cfg.Baseline == nil || cfg.Capture == nil {
+				return Result{}, errMisconfigured(cfg.ID, "Baseline and Capture are required")
+			}
 			baseline, ok := cfg.Baseline(ctx, target, resource, store)
 			if !ok {
 				return Result{Skipped: true, SkipReason: "no baseline available for resource"}, nil
@@ -203,6 +206,13 @@ func compareSnapshots(compare BaselineComparator, baseline, current Snapshot, id
 		obs[i].ResourceID = resourceID
 	}
 	return obs
+}
+
+// errMisconfigured is the error a baseline check returns when it was built from
+// an incomplete config. It is reported on the check's Result rather than
+// panicking on a nil function.
+func errMisconfigured(id CheckID, problem string) error {
+	return fmt.Errorf("harnessx: baseline check %q is misconfigured: %s", id, problem)
 }
 
 // captureResult turns a captured Snapshot into the Result of a baseline probe,
@@ -246,6 +256,9 @@ func NewCaptureBaselineCheck(cfg CaptureBaselineCheckConfig) Check {
 		Timeout:     cfg.Timeout,
 		Concurrency: cfg.Concurrency,
 		RunResource: func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error) {
+			if cfg.Capture == nil {
+				return Result{}, errMisconfigured(cfg.ID, "Capture is required")
+			}
 			return captureResult(cfg.Capture(ctx, target, resource, store))
 		},
 	}
@@ -313,6 +326,9 @@ func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check {
 		Scope:       ScopeGlobal,
 		Timeout:     cfg.Timeout,
 		Run: func(ctx context.Context, target Target, store ResultStore) (Result, error) {
+			if cfg.Baseline == nil || cfg.Capture == nil {
+				return Result{}, errMisconfigured(cfg.ID, "Baseline and Capture are required")
+			}
 			baseline, ok := cfg.Baseline(ctx, target, store)
 			if !ok {
 				return Result{Skipped: true, SkipReason: "no baseline available for target"}, nil
@@ -353,6 +369,9 @@ func NewCaptureGlobalBaselineCheck(cfg CaptureGlobalBaselineCheckConfig) Check {
 		Scope:       ScopeGlobal,
 		Timeout:     cfg.Timeout,
 		Run: func(ctx context.Context, target Target, store ResultStore) (Result, error) {
+			if cfg.Capture == nil {
+				return Result{}, errMisconfigured(cfg.ID, "Capture is required")
+			}
 			return captureResult(cfg.Capture(ctx, target, store))
 		},
 	}

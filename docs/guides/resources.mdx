@@ -89,14 +89,16 @@ engine := harnessx.New(
 
 ## Empty resource lists
 
-If a discovery check finds no resources, per-resource checks depending on it are silently skipped:
+If a discovery check finds no resources, per-resource checks depending on it are skipped, with `Result.SkipReason` set to `"no resources discovered"`:
 
 ```go
 if discovery returns Resources: []Resource{} {
   // Per-resource checks are skipped
-  // Result.Skipped = true
+  // Result.Skipped = true, Result.SkipReason = "no resources discovered"
 }
 ```
+
+A per-resource check with no `DependsOn` can never see a resource, because resources are only discovered by earlier levels. It is always skipped, and its `SkipReason` says so.
 
 ## Common patterns
 

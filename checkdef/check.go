@@ -13,6 +13,9 @@ type checkConfig struct {
 	concurrency int
 	variants    []string
 	variantMode harnessx.VariantMode
+
+	variantTimeout     time.Duration
+	variantConcurrency int
 }
 
 // Option configures the optional fields of a Check built by NewCheck or
@@ -65,6 +68,22 @@ func WithVariantMode(mode harnessx.VariantMode) Option {
 	}
 }
 
+// WithVariantTimeout bounds each variant on its own; the check's Timeout still
+// bounds the whole variant set.
+func WithVariantTimeout(d time.Duration) Option {
+	return func(cfg *checkConfig) {
+		cfg.variantTimeout = d
+	}
+}
+
+// WithVariantConcurrency caps how many variants run at once when the variant
+// mode is VariantsParallel.
+func WithVariantConcurrency(n int) Option {
+	return func(cfg *checkConfig) {
+		cfg.variantConcurrency = n
+	}
+}
+
 func buildBase(def CheckDef, opts []Option) harnessx.Check {
 	var cfg checkConfig
 	for _, opt := range opts {
@@ -88,6 +107,9 @@ func buildBase(def CheckDef, opts []Option) harnessx.Check {
 		Concurrency: cfg.concurrency,
 		Variants:    cfg.variants,
 		VariantMode: cfg.variantMode,
+
+		VariantTimeout:     cfg.variantTimeout,
+		VariantConcurrency: cfg.variantConcurrency,
 	}
 }
 

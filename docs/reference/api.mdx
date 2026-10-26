@@ -419,6 +419,8 @@ type Check struct {
   VariantMode        VariantMode
   RunVariant         VariantCheckFunc
   RunResourceVariant VariantResourceCheckFunc
+  VariantTimeout     time.Duration
+  VariantConcurrency int
 
   Timeout     time.Duration
   Concurrency int
@@ -442,7 +444,9 @@ type ResourceCheckFunc func(ctx context.Context, target Target, resource Resourc
 - `VariantMode`: `VariantsSequential` (default) or `VariantsParallel` — how `Variants` are executed
 - `RunVariant`: Function invoked once per variant (required if `Scope == ScopeGlobal` and `Variants` is non-empty)
 - `RunResourceVariant`: Function invoked once per variant, per resource (required if `Scope == ScopePerResource` and `Variants` is non-empty)
-- `Timeout`: Max execution time of each invocation of the run function — per resource for a per-resource check, and for the whole variant set (not each variant) when `Variants` is set. Falls back to the engine default (30s, see [`WithDefaultTimeout`](#withdefaulttimeout)) when `0`
+- `VariantTimeout`: Max execution time of each variant on its own (optional); `Timeout` still bounds the variant set as a whole
+- `VariantConcurrency`: Max variants in flight at once in `VariantsParallel` mode (optional, unlimited when `0`)
+- `Timeout`: Max execution time of each invocation of the run function — per resource for a per-resource check, and for the whole variant set when `Variants` is set (use `VariantTimeout` to bound each variant). Falls back to the engine default (30s, see [`WithDefaultTimeout`](#withdefaulttimeout)) when `0`
 - `Concurrency`: Max resources run at once for this check; falls back to `WithMaxResourceConcurrency` when `0`
 
 **Per-resource results.** A `ScopePerResource` check is recorded once per resource, readable with `store.GetForResource(id, resourceID)`. `store.Get(id)` returns a rolled-up check-level `Result` for it, available once every resource has run: its `Observations` are all the resources' observations, its `Err` is the first resource error, and it is `Skipped` only if every resource was skipped. `Data` and `Resources` are not aggregated; read them per resource. This is what lets `IfCheckPassed`, `IfCheckObserved` and `IfCheckSkipped` work on a per-resource dependency. The aggregate is not counted in `ScanSummary`.
@@ -521,6 +525,8 @@ func WithTimeout(d time.Duration) Option
 func WithConcurrency(n int) Option // meaningful on NewResourceCheck / NewVariantResourceCheck only
 func WithVariants(variants ...string) Option
 func WithVariantMode(mode harnessx.VariantMode) Option // default VariantsSequential
+func WithVariantTimeout(d time.Duration) Option        // bounds each variant on its own
+func WithVariantConcurrency(n int) Option              // cap on parallel variants
 ```
 
 ### NewVariantCheck / NewVariantResourceCheck
@@ -577,11 +583,14 @@ func ResourceDataAs[T any](resource Resource) (T, bool)
 
 ### StaticResultStore
 
-A `ResultStore` fixture for tests: seed the results a skip decision or condition should see without running the engine. `GetForResource` ignores `resourceID`, and `Resources()` is always empty.
+A `ResultStore` fixture for tests: seed the results a skip decision or condition should see without running the engine.
 
 ```go
 func NewStaticResultStore(results ...Result) *StaticResultStore // keyed by each Result's CheckID
+func (s *StaticResultStore) WithResources(resources ...Resource) *StaticResultStore
 ```
+
+A `Result` with a `ResourceID` is seeded as that resource's result of a per-resource check and is what `GetForResource(id, resourceID)` returns; `Get(id)` then returns the roll-up of those results, as the engine does. A `Result` without a `ResourceID` answers `Get`, and `GetForResource` falls back to it for a resource with no result of its own. `Observations()` is ordered by check ID, then resource ID. `Resources()` returns what `WithResources` seeded.
 
 ### RunVariants
 
@@ -595,6 +604,7 @@ func RunVariants(ctx context.Context, variants []string, mode VariantMode, fn fu
 - `Observations` and `Resources` are the attempts' slices concatenated in that order; an observation with an empty `Variant` gets its variant's name.
 - `Err` is the first non-nil attempt error in `variants` order (not completion order). A failing variant does not stop the others.
 - A panic in `fn` is recovered onto that attempt's `Err` as a `*ScanError`.
+- If `ctx` is cancelled, variants that have not started do not run; each is recorded as an attempt whose `Err` is `ctx.Err()`.
 - `Result.Data` is not set; each attempt's `Data` stays on its `Attempt`.
 
 ### ScanSummary
@@ -609,7 +619,7 @@ type ScanSummary struct {
   Skipped      int // skip decisions, unmet conditions, and results that report Skipped (such as Skip(...))
   Failed       int // executions whose Result.Err is non-nil
   Observations []Observation
-  Results      []Result // in completion order, not deterministic
+  Results      []Result // ordered by dependency level, then check ID, then resource ID
   Duration     time.Duration
   Err          error
 }
@@ -684,6 +694,7 @@ var (
   ErrDuplicateCheckID  // two checks have the same ID
   ErrUnknownDependency // dependency not registered (or removed by WithExclude)
   ErrNoChecks          // no check left to run
+  ErrUnknownCheckID    // WithOnly names an ID that matches no check
 )
 
 // Returned by ProbeAndCompareBaseline:
@@ -732,7 +743,7 @@ func (e *Engine) Register(checks ...Check) error
 - `ErrDuplicateCheckID`, wrapped with the ID, if a check with the same ID is already registered or repeated in `checks`.
 - an error naming the check if it cannot run: an unknown `Scope`, a per-resource skip decision (`SkipResourceWhen`) on a `ScopeGlobal` check, or no run function for its `Scope` and `Variants`.
 
-Registration is all or nothing: no check from `checks` is added when one is rejected. Unknown dependencies and cycles span several checks, so they are reported by `Run`.
+Registration is all or nothing: no check from `checks` is added when one is rejected. Unknown dependencies and cycles span several checks, so they are reported by `Run`; their errors name the check and the missing dependency, or the checks that could not be ordered.
 
 **Example:**
 ```go
@@ -753,6 +764,7 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 **Returns:**
 - `ScanSummary` with counts of executed, failed and skipped checks. It is returned alongside any error, and `Reporter.OnScanComplete` is always called.
 - `ErrNoChecks` if no check is left to run
+- `ErrUnknownCheckID`, naming the IDs, if `WithOnly` names a check that does not exist
 - `ErrDuplicateCheckID`, `ErrUnknownDependency` or `ErrCycleDetected` for an invalid graph — including `ErrUnknownDependency` if `WithOnly`/`WithExclude` drops a check another selected check depends on, and `ErrDuplicateCheckID` for a duplicate among the `WithChecks` checks passed to `New`
 - the same invalid-check errors as `Register`, for checks that never went through it (a `Scenario`'s checks)
 - the context's error if `ctx` is cancelled
@@ -802,6 +814,8 @@ Restricts a `Run` call to the given check IDs.
 ```go
 func WithOnly(ids ...CheckID) RunOption
 ```
+
+`Run` and `RunScenario` return `ErrUnknownCheckID` (naming them) if an ID matches no check, so a typo cannot silently select nothing.
 
 ### WithExclude
 
@@ -925,7 +939,7 @@ Each invocation of a check's run function gets its own timeout: `Check.Timeout`,
 
 ### Context Cancellation
 
-If the root context is canceled, running checks are canceled and no further level starts. The scan returns the context error alongside the partial `ScanSummary`.
+If the root context is canceled, running checks are canceled and no further level starts. The scan returns the context error alongside the `ScanSummary`, in which every check that did not get to run is recorded as skipped with the reason `"scan cancelled"`, so `Executed + Skipped + Failed` still accounts for all of them.
 
 ## Common Patterns
 

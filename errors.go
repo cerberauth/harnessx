@@ -11,6 +11,10 @@ var (
 	ErrUnknownDependency = errors.New("harnessx: unknown dependency check ID")
 	ErrNoChecks          = errors.New("harnessx: no checks registered")
 
+	// ErrUnknownCheckID is returned by Run and RunScenario when WithOnly names a
+	// check ID that does not exist.
+	ErrUnknownCheckID = errors.New("harnessx: unknown check ID in WithOnly")
+
 	// ErrNoBaseline is returned by ProbeAndCompareBaseline when nothing is
 	// stored under the baseline check's ID to compare against.
 	ErrNoBaseline = errors.New("harnessx: no baseline available")

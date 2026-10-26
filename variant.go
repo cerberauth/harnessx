@@ -6,6 +6,8 @@ import (
 	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/cerberauth/harnessx/internal/semaphore"
 )
 
 // RunVariants calls fn once per entry in variants and merges the outcomes into
@@ -29,31 +31,67 @@ import (
 //   - A panic in fn is recovered and recorded as that attempt's Err, a
 //     *ScanError, leaving the other variants unaffected.
 //
+// If ctx is cancelled, variants that have not started do not run: each is
+// recorded as an Attempt whose Err is ctx.Err().
+//
 // Result.Data is not set: each attempt's Data stays on its own Attempt.
 func RunVariants(ctx context.Context, variants []string, mode VariantMode, fn func(context.Context, string) (Result, error)) Result {
+	return runVariants(ctx, variants, mode, variantLimits{}, fn)
+}
+
+// variantLimits bounds how a check's variants run; the zero value is no limit.
+type variantLimits struct {
+	// concurrency caps the variants in flight at once in VariantsParallel mode.
+	concurrency int
+	// timeout bounds each variant on its own, on top of the check's timeout.
+	timeout time.Duration
+}
+
+func runVariants(ctx context.Context, variants []string, mode VariantMode, limits variantLimits, fn func(context.Context, string) (Result, error)) Result {
 	attempts := make([]Attempt, len(variants))
 
 	if mode == VariantsParallel {
+		var sem *semaphore.Semaphore
+		if limits.concurrency > 0 {
+			sem = semaphore.New(limits.concurrency)
+		}
 		var wg sync.WaitGroup
 		for i, variant := range variants {
 			wg.Add(1)
 			go func(i int, variant string) {
 				defer wg.Done()
-				attempts[i] = runVariantAttempt(ctx, variant, fn)
+				if sem != nil {
+					if !sem.Acquire(ctx.Done()) {
+						attempts[i] = Attempt{Variant: variant, Err: ctx.Err()}
+						return
+					}
+					defer sem.Release()
+				}
+				attempts[i] = runVariantAttempt(ctx, variant, limits.timeout, fn)
 			}(i, variant)
 		}
 		wg.Wait()
 	} else {
 		for i, variant := range variants {
-			attempts[i] = runVariantAttempt(ctx, variant, fn)
+			if err := ctx.Err(); err != nil {
+				attempts[i] = Attempt{Variant: variant, Err: err}
+				continue
+			}
+			attempts[i] = runVariantAttempt(ctx, variant, limits.timeout, fn)
 		}
 	}
 
 	return aggregateAttempts(attempts)
 }
 
-func runVariantAttempt(ctx context.Context, variant string, fn func(context.Context, string) (Result, error)) (attempt Attempt) {
+func runVariantAttempt(ctx context.Context, variant string, timeout time.Duration, fn func(context.Context, string) (Result, error)) (attempt Attempt) {
 	attempt.Variant = variant
+
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 
 	start := time.Now()
 	defer func() {

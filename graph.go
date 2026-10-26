@@ -1,9 +1,16 @@
 package harnessx
 
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
+
 // levels groups checks into parallel execution levels (Kahn's algorithm): every
 // check in a level depends only on checks in earlier levels. It returns
-// ErrUnknownDependency if a check depends on an ID that is not in checks, and
-// ErrCycleDetected if the dependencies form a cycle.
+// ErrUnknownDependency (naming the check and the missing dependency) if a check
+// depends on an ID that is not in checks, and ErrCycleDetected (listing the
+// checks that could not be ordered) if the dependencies form a cycle.
 func levels(checks []Check) ([][]Check, error) {
 	byID := make(map[CheckID]Check, len(checks))
 	for _, c := range checks {
@@ -16,7 +23,7 @@ func levels(checks []Check) ([][]Check, error) {
 		inDegree[c.ID] += 0
 		for _, dep := range c.DependsOn {
 			if _, ok := byID[dep]; !ok {
-				return nil, ErrUnknownDependency
+				return nil, fmt.Errorf("%w: check %q depends on %q", ErrUnknownDependency, c.ID, dep)
 			}
 			dependents[dep] = append(dependents[dep], c.ID)
 			inDegree[c.ID]++
@@ -53,7 +60,14 @@ func levels(checks []Check) ([][]Check, error) {
 	}
 
 	if visited != len(checks) {
-		return nil, ErrCycleDetected
+		var stuck []string
+		for _, c := range checks {
+			if inDegree[c.ID] > 0 {
+				stuck = append(stuck, string(c.ID))
+			}
+		}
+		slices.Sort(stuck)
+		return nil, fmt.Errorf("%w: cannot order %s", ErrCycleDetected, strings.Join(stuck, ", "))
 	}
 	return out, nil
 }
