@@ -29,15 +29,18 @@ type Baseline = Snapshot
 Capture the baseline at runtime with a dedicated check, then compare against it in a downstream check:
 
 ```go
-probeCheck := harnessx.CaptureBaselineCheck("baseline-probe", "Baseline Probe",
-  func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+probeCheck := harnessx.NewCaptureBaselineCheck(harnessx.CaptureBaselineCheckConfig{
+  ID:        "baseline-probe",
+  Name:      "Baseline Probe",
+  DependsOn: []harnessx.CheckID{"discovery"},
+  Capture: func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
     statusCode, header, body, duration, err := probe.Do(ctx, client, unauthenticatedRequest(r.URL))
     if err != nil {
       return harnessx.Snapshot{}, err
     }
     return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
-  })
-probeCheck.DependsOn = []harnessx.CheckID{"discovery"}
+  },
+})
 
 compareCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
   ID:        "auth-bypass",
@@ -53,7 +56,7 @@ compareCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
 })
 ```
 
-`CaptureBaselineCheck` stores the captured `Snapshot` in `Result.Data` per resource; `BaselineFromCheck` reads it back via `store.GetForResource`.
+`NewCaptureBaselineCheck` stores the captured `Snapshot` in `Result.Data` per resource; `BaselineFromCheck` reads it back via `store.GetForResource`.
 
 ## Manual baseline
 

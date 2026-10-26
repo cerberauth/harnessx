@@ -2,7 +2,9 @@ package harnessx
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -10,10 +12,15 @@ import (
 )
 
 type resultStore struct {
-	mu        sync.RWMutex
-	results   map[CheckID]Result
-	perRes    map[checkResourceKey]Result
-	resources []Resource
+	mu      sync.RWMutex
+	results map[CheckID]Result
+	perRes  map[checkResourceKey]Result
+	// aggregates holds, for each ScopePerResource check, a check-level Result
+	// rolled up from its per-resource results. It is served by Get but kept out
+	// of Observations so findings are not counted twice.
+	aggregates map[CheckID]Result
+	resources  []Resource
+	resourceID map[string]struct{}
 }
 
 type checkResourceKey struct {
@@ -23,8 +30,10 @@ type checkResourceKey struct {
 
 func newResultStore() *resultStore {
 	return &resultStore{
-		results: make(map[CheckID]Result),
-		perRes:  make(map[checkResourceKey]Result),
+		results:    make(map[CheckID]Result),
+		perRes:     make(map[checkResourceKey]Result),
+		aggregates: make(map[CheckID]Result),
+		resourceID: make(map[string]struct{}),
 	}
 }
 
@@ -40,12 +49,27 @@ func (s *resultStore) setForResource(id CheckID, resourceID string, r Result) {
 	s.mu.Unlock()
 }
 
+func (s *resultStore) setAggregate(id CheckID, r Result) {
+	s.mu.Lock()
+	s.aggregates[id] = r
+	s.mu.Unlock()
+}
+
+// mergeResources adds resources to the store, dropping any whose ID is already
+// known: the first resource discovered under an ID wins, so a resource that
+// two checks both emit is run against once.
 func (s *resultStore) mergeResources(resources []Resource) {
 	if len(resources) == 0 {
 		return
 	}
 	s.mu.Lock()
-	s.resources = append(s.resources, resources...)
+	for _, res := range resources {
+		if _, dup := s.resourceID[res.ID]; dup {
+			continue
+		}
+		s.resourceID[res.ID] = struct{}{}
+		s.resources = append(s.resources, res)
+	}
 	s.mu.Unlock()
 }
 
@@ -61,20 +85,28 @@ func (s *resultStore) snapshot() ResultStore {
 	for k, v := range s.perRes {
 		perRes[k] = v
 	}
+	aggregates := make(map[CheckID]Result, len(s.aggregates))
+	for k, v := range s.aggregates {
+		aggregates[k] = v
+	}
 	resources := make([]Resource, len(s.resources))
 	copy(resources, s.resources)
 
-	return &storeSnapshot{results: results, perRes: perRes, resources: resources}
+	return &storeSnapshot{results: results, perRes: perRes, aggregates: aggregates, resources: resources}
 }
 
 type storeSnapshot struct {
-	results   map[CheckID]Result
-	perRes    map[checkResourceKey]Result
-	resources []Resource
+	results    map[CheckID]Result
+	perRes     map[checkResourceKey]Result
+	aggregates map[CheckID]Result
+	resources  []Resource
 }
 
 func (s *storeSnapshot) Get(id CheckID) (Result, bool) {
-	r, ok := s.results[id]
+	if r, ok := s.results[id]; ok {
+		return r, true
+	}
+	r, ok := s.aggregates[id]
 	return r, ok
 }
 
@@ -107,15 +139,19 @@ type Engine struct {
 	cfg    engineConfig
 	checks []Check
 	mu     sync.RWMutex
+
+	// initErr is the error from registering the WithChecks checks in New, which
+	// has no way to return it; Run reports it instead of running a partial set.
+	initErr error
 }
 
 // New returns an Engine configured by opts. By default it runs as many checks,
 // and as many resources per check, concurrently as there are CPUs, with a 30
 // second check timeout and no reporters.
 //
-// Checks passed with WithChecks are registered immediately. New cannot report
-// a registration error such as a duplicate check ID, so use Register when you
-// need to see one.
+// Checks passed with WithChecks are registered immediately. New cannot return
+// a registration error such as a duplicate check ID, so Run returns it instead
+// and runs nothing; use Register to see it right away.
 func New(opts ...Option) *Engine {
 	cfg := defaultConfig()
 	for _, o := range opts {
@@ -123,36 +159,55 @@ func New(opts ...Option) *Engine {
 	}
 	e := &Engine{cfg: cfg}
 	if len(cfg.initialChecks) > 0 {
-		_ = e.Register(cfg.initialChecks...)
+		e.initErr = e.Register(cfg.initialChecks...)
 	}
 	return e
 }
 
+// Register adds checks to the engine. It is all or nothing: if any check's ID
+// is already registered, or repeated in checks, it returns ErrDuplicateCheckID
+// wrapped with the ID and registers none of them. Unknown dependencies and
+// cycles are reported by Run, not here. Register is safe to call concurrently
+// with Run.
 func (e *Engine) Register(checks ...Check) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	existing := make(map[CheckID]struct{}, len(e.checks))
+	seen := make(map[CheckID]struct{}, len(e.checks)+len(checks))
 	for _, c := range e.checks {
-		existing[c.ID] = struct{}{}
+		seen[c.ID] = struct{}{}
 	}
 	for _, c := range checks {
-		if _, dup := existing[c.ID]; dup {
+		if _, dup := seen[c.ID]; dup {
 			return fmt.Errorf("%w: %q", ErrDuplicateCheckID, c.ID)
 		}
-		existing[c.ID] = struct{}{}
-		e.checks = append(e.checks, c)
+		seen[c.ID] = struct{}{}
 	}
+	e.checks = append(e.checks, checks...)
 	return nil
 }
 
+// Run executes the registered checks against target and returns a summary.
+//
+// Checks are grouped into levels by their DependsOn graph; the checks of a
+// level run concurrently, bounded by WithMaxConcurrency, and a level starts
+// once the previous one is done. opts narrow the registered checks for this
+// call only; see WithOnly, WithExclude and the metadata filters.
+//
+// Run returns ErrNoChecks if no check is left to run; ErrDuplicateCheckID,
+// ErrUnknownDependency or ErrCycleDetected (wrapped with the offending ID) for
+// an invalid graph, including a duplicate among the WithChecks checks passed to
+// New; an error for a check with an invalid Scope or a missing run function;
+// or the context's error if ctx is cancelled. A failing or panicking check does
+// not stop the scan: it is counted in ScanSummary.Failed and its error is on its
+// Result. Reporter.OnScanComplete is called in every case.
 func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (ScanSummary, error) {
 	e.mu.RLock()
 	checks := make([]Check, len(e.checks))
 	copy(checks, e.checks)
 	e.mu.RUnlock()
 
-	return e.run(ctx, target, FilterChecks(checks, opts...), nil)
+	return e.run(ctx, target, FilterChecks(checks, opts...), nil, e.initErr)
 }
 
 // RunScenario executes the checks in scenario against target using the
@@ -173,10 +228,10 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario, opts ...RunOption) (ScanSummary, error) {
 	checks := make([]Check, len(scenario.Checks))
 	copy(checks, scenario.Checks)
-	return e.run(ctx, target, FilterChecks(checks, opts...), scenario.Reporters)
+	return e.run(ctx, target, FilterChecks(checks, opts...), scenario.Reporters, nil)
 }
 
-func (e *Engine) run(ctx context.Context, target Target, checks []Check, callReporters []Reporter) (ScanSummary, error) {
+func (e *Engine) run(ctx context.Context, target Target, checks []Check, callReporters []Reporter, preErr error) (ScanSummary, error) {
 	start := time.Now()
 
 	cfg := e.cfg
@@ -196,6 +251,9 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 		return summary, err
 	}
 
+	if preErr != nil {
+		return finalize(preErr)
+	}
 	if len(checks) == 0 {
 		return finalize(ErrNoChecks)
 	}
@@ -206,6 +264,12 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 			return finalize(fmt.Errorf("%w: %q", ErrDuplicateCheckID, c.ID))
 		}
 		seen[c.ID] = struct{}{}
+		if c.Scope != ScopeGlobal && c.Scope != ScopePerResource {
+			return finalize(fmt.Errorf("harnessx: check %q has invalid Scope %d", c.ID, c.Scope))
+		}
+		if c.Scope == ScopeGlobal && c.Skip.resourceFn != nil {
+			return finalize(fmt.Errorf("harnessx: check %q has ScopeGlobal but a per-resource Skip decision (SkipResourceWhen); use SkipWhen", c.ID))
+		}
 		if len(c.Variants) > 0 {
 			if c.Scope == ScopePerResource && c.RunResourceVariant == nil {
 				return finalize(fmt.Errorf("harnessx: check %q has ScopePerResource with Variants but no RunResourceVariant set", c.ID))
@@ -274,7 +338,7 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 
 				for _, cond := range chk.Conditions {
 					if !cond(snapshot) {
-						skipped := Result{CheckID: chk.ID, Skipped: true}
+						skipped := Result{CheckID: chk.ID, Skipped: true, SkipReason: "condition not met"}
 						store.set(chk.ID, skipped)
 						for _, r := range reporters {
 							r.OnCheckComplete(skipped)
@@ -298,13 +362,13 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 					}
 					var result Result
 					if len(chk.Variants) > 0 {
-						result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
+						result = runSafe(ctx, chk.ID, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
 							return RunVariants(checkCtx, chk.Variants, chk.VariantMode, func(vctx context.Context, variant string) (Result, error) {
 								return chk.RunVariant(vctx, target, variant, snapshot)
 							}), nil
 						})
 					} else {
-						result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
+						result = runSafe(ctx, chk.ID, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
 							return chk.Run(checkCtx, target, snapshot)
 						})
 					}
@@ -316,9 +380,12 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 					store.mergeResources(result.Resources)
 
 					summaryMu.Lock()
-					if result.Err != nil {
+					switch {
+					case result.Err != nil:
 						summary.Failed++
-					} else {
+					case result.Skipped:
+						summary.Skipped++
+					default:
 						summary.Executed++
 					}
 					summary.Observations = append(summary.Observations, result.Observations...)
@@ -329,7 +396,7 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 
 				resources := snapshot.Resources()
 				if len(resources) == 0 {
-					skipped := Result{CheckID: chk.ID, Skipped: true}
+					skipped := Result{CheckID: chk.ID, Skipped: true, SkipReason: "no resources discovered"}
 					store.set(chk.ID, skipped)
 					for _, r := range reporters {
 						r.OnCheckComplete(skipped)
@@ -353,8 +420,12 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 				}
 				resSem := semaphore.New(resConcurrency)
 
+				fanStart := time.Now()
+				resResults := make([]Result, len(resources))
+				resRan := make([]bool, len(resources))
+
 				var resWg sync.WaitGroup
-				for _, res := range resources {
+				for i, res := range resources {
 					resWg.Add(1)
 					go func() {
 						defer resWg.Done()
@@ -366,6 +437,7 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 						if reason := chk.Skip.EvalResource(ctx, target, res, snapshot); reason != "" {
 							skipped := Result{CheckID: chk.ID, ResourceID: res.ID, Skipped: true, SkipReason: reason}
 							store.setForResource(chk.ID, res.ID, skipped)
+							resResults[i], resRan[i] = skipped, true
 							for _, r := range reporters {
 								r.OnCheckComplete(skipped)
 							}
@@ -381,13 +453,13 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 						}
 						var result Result
 						if len(chk.Variants) > 0 {
-							result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
+							result = runSafe(ctx, chk.ID, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
 								return RunVariants(checkCtx, chk.Variants, chk.VariantMode, func(vctx context.Context, variant string) (Result, error) {
 									return chk.RunResourceVariant(vctx, target, res, variant, snapshot)
 								}), nil
 							})
 						} else {
-							result = runSafe(ctx, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
+							result = runSafe(ctx, chk.ID, effectiveTimeout, func(checkCtx context.Context) (Result, error) {
 								return chk.RunResource(checkCtx, target, res, snapshot)
 							})
 						}
@@ -397,12 +469,16 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 							r.OnCheckComplete(result)
 						}
 						store.setForResource(chk.ID, res.ID, result)
+						resResults[i], resRan[i] = result, true
 						store.mergeResources(result.Resources)
 
 						summaryMu.Lock()
-						if result.Err != nil {
+						switch {
+						case result.Err != nil:
 							summary.Failed++
-						} else {
+						case result.Skipped:
+							summary.Skipped++
+						default:
 							summary.Executed++
 						}
 						summary.Observations = append(summary.Observations, result.Observations...)
@@ -411,6 +487,7 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 					}()
 				}
 				resWg.Wait()
+				store.setAggregate(chk.ID, aggregateResources(chk.ID, resResults, resRan, time.Since(fanStart)))
 			}()
 		}
 		levelWg.Wait()
@@ -422,7 +499,55 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 	return finalize(nil)
 }
 
-func runSafe(ctx context.Context, timeout time.Duration, fn func(context.Context) (Result, error)) (result Result) {
+// aggregateResources rolls the per-resource results of one check up into the
+// check-level Result served by ResultStore.Get. ran marks the resources that
+// actually produced a result (none are missing unless the scan was cancelled).
+//
+// The aggregate holds every resource's observations, the first error in
+// resource order, and is Skipped only when every resource was skipped. It is
+// kept out of the scan summary, which counts the per-resource results.
+func aggregateResources(id CheckID, results []Result, ran []bool, duration time.Duration) Result {
+	agg := Result{CheckID: id, Duration: duration}
+	completed, skipped := 0, 0
+	for i, r := range results {
+		if !ran[i] {
+			continue
+		}
+		completed++
+		agg.Observations = append(agg.Observations, r.Observations...)
+		switch {
+		case r.Err != nil:
+			if agg.Err == nil {
+				agg.Err = r.Err
+			}
+		case r.Skipped:
+			skipped++
+		}
+	}
+	if completed > 0 && skipped == completed {
+		agg.Skipped = true
+		agg.SkipReason = "all resources skipped"
+	}
+	return agg
+}
+
+// tagScanErrors sets CheckID on any recovered-panic ScanError in result that
+// does not have one yet. RunVariants records variant panics without knowing the
+// check they belong to.
+func tagScanErrors(id CheckID, result *Result) {
+	tag := func(err error) {
+		var se *ScanError
+		if errors.As(err, &se) && se.CheckID == "" {
+			se.CheckID = id
+		}
+	}
+	tag(result.Err)
+	for i := range result.Attempts {
+		tag(result.Attempts[i].Err)
+	}
+}
+
+func runSafe(ctx context.Context, id CheckID, timeout time.Duration, fn func(context.Context) (Result, error)) (result Result) {
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -430,7 +555,7 @@ func runSafe(ctx context.Context, timeout time.Duration, fn func(context.Context
 	defer func() {
 		result.Duration = time.Since(start)
 		if r := recover(); r != nil {
-			result.Err = &ScanError{Cause: fmt.Errorf("panic: %v", r)}
+			result.Err = &ScanError{CheckID: id, Cause: fmt.Errorf("panic: %v", r), Stack: debug.Stack()}
 		}
 	}()
 
@@ -439,5 +564,6 @@ func runSafe(ctx context.Context, timeout time.Duration, fn func(context.Context
 	if err != nil && result.Err == nil {
 		result.Err = err
 	}
+	tagScanErrors(id, &result)
 	return result
 }

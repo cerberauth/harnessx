@@ -103,15 +103,18 @@ func run() error {
 
 	// The "baseline probe": captures the normal, unauthenticated response for
 	// every resource and stores it for BaselineFromCheck to read back.
-	baselineProbe := harnessx.CaptureBaselineCheck("baseline-probe", "Baseline Probe",
-		func(ctx context.Context, _ harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+	baselineProbe := harnessx.NewCaptureBaselineCheck(harnessx.CaptureBaselineCheckConfig{
+		ID:        "baseline-probe",
+		Name:      "Baseline Probe",
+		DependsOn: []harnessx.CheckID{checkIDDiscovery},
+		Capture: func(ctx context.Context, _ harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
 			req, err := harnessx.NewRequestFromResource(ctx, r)
 			if err != nil {
 				return harnessx.Snapshot{}, err
 			}
 			return capture(ctx, req)
-		})
-	baselineProbe.DependsOn = []harnessx.CheckID{checkIDDiscovery}
+		},
+	})
 
 	// reports-deviation: baseline from the probe, default (status-code) comparator.
 	reportsCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{

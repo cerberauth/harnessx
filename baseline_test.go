@@ -2,9 +2,11 @@ package harnessx
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/cerberauth/harnessx/probe"
 )
@@ -439,6 +441,52 @@ func TestCaptureGlobalBaselineCheck_FeedsBaselineFromGlobalCheck(t *testing.T) {
 	}
 }
 
+func TestNewCaptureBaselineCheck_ConfigWiresDependsOnAndLimits(t *testing.T) {
+	check := NewCaptureBaselineCheck(CaptureBaselineCheckConfig{
+		ID:          testCheckIDProbe,
+		Name:        "Baseline Probe",
+		DependsOn:   []CheckID{testCheckIDDiscovery},
+		Timeout:     5 * time.Second,
+		Concurrency: 3,
+		Capture: func(context.Context, Target, Resource, ResultStore) (Snapshot, error) {
+			return Snapshot{StatusCode: 401}, nil
+		},
+	})
+	if check.Scope != ScopePerResource || len(check.DependsOn) != 1 || check.DependsOn[0] != testCheckIDDiscovery ||
+		check.Timeout != 5*time.Second || check.Concurrency != 3 {
+		t.Errorf("check = %+v, want per-resource with the configured DependsOn, Timeout and Concurrency", check)
+	}
+
+	discovery := Check{
+		ID:    testCheckIDDiscovery,
+		Scope: ScopeGlobal,
+		Run: func(context.Context, Target, ResultStore) (Result, error) {
+			return Result{Resources: []Resource{{ID: "r1"}}}, nil
+		},
+	}
+	summary, err := New(WithChecks(discovery, check)).Run(context.Background(), testTarget)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.Skipped != 0 || summary.Executed != 2 {
+		t.Errorf("Executed/Skipped = %d/%d, want 2/0", summary.Executed, summary.Skipped)
+	}
+}
+
+func TestNewCaptureGlobalBaselineCheck_ConfigWiresDependsOn(t *testing.T) {
+	check := NewCaptureGlobalBaselineCheck(CaptureGlobalBaselineCheckConfig{
+		ID:        testCheckIDProbe,
+		DependsOn: []CheckID{testCheckIDDiscovery},
+		Timeout:   time.Second,
+		Capture: func(context.Context, Target, ResultStore) (Snapshot, error) {
+			return Snapshot{StatusCode: 401}, nil
+		},
+	})
+	if check.Scope != ScopeGlobal || len(check.DependsOn) != 1 || check.Timeout != time.Second {
+		t.Errorf("check = %+v, want global with the configured DependsOn and Timeout", check)
+	}
+}
+
 // --- ProbeAndCompareBaseline ---
 
 func TestProbeAndCompareBaseline_VulnerableWhenStatusDiffersFromBaseline(t *testing.T) {
@@ -548,5 +596,26 @@ func TestProbeAndCompareBaseline_ClientDoError_ReturnsError(t *testing.T) {
 	_, _, err := ProbeAndCompareBaseline(context.Background(), probe.New(), build, store, testCheckIDProbe)
 	if err == nil {
 		t.Error("expected error, got nil")
+	}
+}
+
+func TestProbeAndCompareBaseline_NoBaseline_ReturnsErrNoBaseline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	build := func(ctx context.Context) (*http.Request, error) {
+		return probe.NewRequest(ctx, http.MethodGet, srv.URL, nil)
+	}
+	snap, vulnerable, err := ProbeAndCompareBaseline(context.Background(), probe.New(), build, NewStaticResultStore(), testCheckIDProbe)
+	if !errors.Is(err, ErrNoBaseline) {
+		t.Fatalf("error = %v, want ErrNoBaseline", err)
+	}
+	if vulnerable {
+		t.Error("vulnerable = true, want false when there is nothing to compare against")
+	}
+	if snap.StatusCode != http.StatusOK {
+		t.Errorf("StatusCode = %d, want the captured %d", snap.StatusCode, http.StatusOK)
 	}
 }

@@ -123,17 +123,22 @@ type Attempt struct {
 // their dependency level started, so they see the results of earlier levels
 // only — never those of checks in the same level.
 //
-// A ScopePerResource check is recorded per resource: read its results with
-// GetForResource. Get — and therefore IfCheckPassed, IfCheckObserved,
-// IfCheckSkipped, GetData and BaselineFromGlobalCheck — does not find them.
+// A ScopePerResource check is recorded once per resource, readable with
+// GetForResource. Get returns a rolled-up check-level Result for it, available
+// once every resource has run: its Observations are all the resources'
+// observations, its Err is the first resource error, and it is Skipped only if
+// every resource was skipped. Data and Resources are not aggregated; read them
+// per resource.
 type ResultStore interface {
-	// Get returns the result recorded for a global check, and whether one exists.
+	// Get returns the result recorded for a check, and whether one exists. For
+	// a ScopePerResource check it is the aggregate described above.
 	Get(id CheckID) (Result, bool)
 	// GetForResource returns the result of a ScopePerResource check for one
 	// resource, and whether one exists.
 	GetForResource(id CheckID, resourceID string) (Result, bool)
 	// Observations returns every observation recorded so far, in no
-	// particular order.
+	// particular order. Each is returned once, whether it comes from a global
+	// or a per-resource result.
 	Observations() []Observation
 	// Resources returns every resource discovered so far.
 	Resources() []Resource

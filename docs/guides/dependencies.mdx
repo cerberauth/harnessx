@@ -113,7 +113,7 @@ checkB := harnessx.Check{
 }
 ```
 
-`store.Get("a")` returns the whole `Result`. The results of a per-resource check are recorded per resource and read with `store.GetForResource(id, resourceID)`; `Get` and `GetData` do not find them.
+`store.Get("a")` returns the whole `Result`. A per-resource check is recorded per resource and read with `store.GetForResource(id, resourceID)`; `Get` returns a rolled-up result for it (all observations, the first error, skipped only if every resource was), which is what conditions such as `IfCheckObserved` use. Its `Data` is not aggregated, so read per-resource data with `GetForResource`.
 
 ## Best practices
 

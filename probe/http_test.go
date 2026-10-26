@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -813,40 +814,69 @@ func TestBackoffDuration_NeverExceedsCap(t *testing.T) {
 
 func TestSnapshotBody_NilBody(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	data, err := snapshotBody(req)
+	data, hasBody, err := snapshotBody(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if data != nil {
-		t.Errorf("data = %v, want nil", data)
+	if hasBody || data != nil {
+		t.Errorf("data = %v, hasBody = %v, want no body", data, hasBody)
 	}
 }
 
-func TestSnapshotBody_ReadAndRestore(t *testing.T) {
+func TestSnapshotBody_UsesGetBodyAndLeavesRequestAlone(t *testing.T) {
 	const want = "body content"
 	req, _ := http.NewRequest(http.MethodPost, "http://example.com", strings.NewReader(want))
-	data, err := snapshotBody(req)
+	orig := req.Body
+	data, hasBody, err := snapshotBody(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if string(data) != want {
-		t.Errorf("data = %q, want %q", data, want)
+	if !hasBody || string(data) != want {
+		t.Errorf("data = %q, hasBody = %v, want %q", data, hasBody, want)
 	}
-	// Body should be restored and readable again.
-	restored, _ := io.ReadAll(req.Body)
-	if string(restored) != want {
-		t.Errorf("restored body = %q, want %q", restored, want)
+	if req.Body != orig {
+		t.Error("snapshotBody replaced req.Body")
+	}
+}
+
+func TestSnapshotBody_ReadsBodyWithoutGetBody(t *testing.T) {
+	const want = "body content"
+	req, _ := http.NewRequest(http.MethodPost, "http://example.com", io.NopCloser(strings.NewReader(want)))
+	if req.GetBody != nil {
+		t.Fatal("test needs a request without GetBody")
+	}
+	orig := req.Body
+	data, hasBody, err := snapshotBody(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !hasBody || string(data) != want {
+		t.Errorf("data = %q, hasBody = %v, want %q", data, hasBody, want)
+	}
+	if req.Body != orig {
+		t.Error("snapshotBody replaced req.Body")
+	}
+}
+
+func TestSnapshotBody_EmptyBody(t *testing.T) {
+	req, _ := http.NewRequest(http.MethodPost, "http://example.com", io.NopCloser(strings.NewReader("")))
+	data, hasBody, err := snapshotBody(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !hasBody || len(data) != 0 {
+		t.Errorf("data = %q, hasBody = %v, want an empty body", data, hasBody)
 	}
 }
 
 func TestSnapshotBody_NoBody(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com", http.NoBody)
-	data, err := snapshotBody(req)
+	data, hasBody, err := snapshotBody(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if data != nil {
-		t.Errorf("data = %v, want nil for http.NoBody", data)
+	if hasBody || data != nil {
+		t.Errorf("data = %v, hasBody = %v, want no body for http.NoBody", data, hasBody)
 	}
 }
 
@@ -881,3 +911,91 @@ func TestSleepCtx_CancelledContext(t *testing.T) {
 
 // Ensure Probe satisfies http.RoundTripper at compile time.
 var _ http.RoundTripper = (*Probe)(nil)
+
+// --- RoundTripper contract and request-body handling ---
+
+func TestRoundTrip_DoesNotModifyRequest(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = string(b)
+	}))
+	defer srv.Close()
+
+	body := io.NopCloser(strings.NewReader("payload"))
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, body)
+	req.ContentLength = -1
+
+	resp, err := New(WithMaxRetries(0)).RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if got != "payload" {
+		t.Errorf("server body = %q, want %q", got, "payload")
+	}
+	if req.Body != body {
+		t.Error("RoundTrip replaced the caller's req.Body")
+	}
+	if req.ContentLength != -1 {
+		t.Errorf("RoundTrip changed req.ContentLength to %d", req.ContentLength)
+	}
+	if req.Header.Get("User-Agent") != "" {
+		t.Error("RoundTrip set a header on the caller's request")
+	}
+}
+
+func TestRoundTrip_EmptyBodyHasKnownLength(t *testing.T) {
+	var contentLength int64
+	var transferEncoding []string
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		contentLength = r.ContentLength
+		transferEncoding = r.TransferEncoding
+	}))
+	defer srv.Close()
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, io.NopCloser(strings.NewReader("")))
+	resp, err := New(WithMaxRetries(0)).RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if contentLength != 0 {
+		t.Errorf("ContentLength = %d, want 0", contentLength)
+	}
+	if len(transferEncoding) != 0 {
+		t.Errorf("TransferEncoding = %v, want none (not chunked)", transferEncoding)
+	}
+}
+
+func TestRetryAfterDuration_RateLimitResetDelta(t *testing.T) {
+	tests := []struct {
+		name   string
+		reset  string
+		want   time.Duration
+		approx bool
+	}{
+		{name: "delta seconds", reset: "30", want: 30 * time.Second},
+		{name: "zero", reset: "0", want: 0},
+		{name: "negative", reset: "-5", want: 0},
+		{name: "future epoch", reset: strconv.FormatInt(time.Now().Add(20*time.Second).Unix(), 10), want: 20 * time.Second, approx: true},
+		{name: "past epoch", reset: strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10), want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &http.Response{Header: http.Header{"X-Ratelimit-Reset": []string{tt.reset}}}
+			got := retryAfterDuration(resp, time.Millisecond, 0)
+			if tt.approx {
+				if got < tt.want-2*time.Second || got > tt.want {
+					t.Errorf("got %v, want about %v", got, tt.want)
+				}
+				return
+			}
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
