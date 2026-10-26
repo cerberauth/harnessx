@@ -11,6 +11,7 @@ const (
 	idDiscover    = "discover"
 	idBoomVariant = "boom-variant"
 	idSkipAll     = "skip-all"
+	idBroken      = "broken-check"
 	dupResourceID = "dup"
 )
 
@@ -210,21 +211,57 @@ func TestEngine_NewDefersWithChecksErrorToRun(t *testing.T) {
 	}
 }
 
-func TestEngine_RejectsInvalidScope(t *testing.T) {
-	_, err := runEngine(t, Check{ID: "bad", Scope: CheckScope(7)})
+// requireInvalidCheck asserts that chk is rejected both when registered and,
+// since a Scenario's checks bypass Register, when run through RunScenario.
+func requireInvalidCheck(t *testing.T, chk Check) {
+	t.Helper()
+	e := New()
+	if err := e.Register(chk); err == nil {
+		t.Error("Register accepted an invalid check")
+	}
+	summary, err := e.RunScenario(context.Background(), Target{}, Scenario{Checks: []Check{chk}})
 	if err == nil {
-		t.Fatal("Run accepted a check with an unknown Scope")
+		t.Error("RunScenario ran an invalid check")
+	}
+	if summary.Executed+summary.Failed+summary.Skipped != 0 {
+		t.Errorf("an invalid check produced results: %+v", summary)
 	}
 }
 
+func TestEngine_RejectsInvalidScope(t *testing.T) {
+	requireInvalidCheck(t, Check{ID: idBroken, Scope: CheckScope(7)})
+}
+
 func TestEngine_RejectsResourceSkipOnGlobalCheck(t *testing.T) {
-	_, err := runEngine(t, Check{
+	requireInvalidCheck(t, Check{
 		ID: "g", Scope: ScopeGlobal,
 		Skip: SkipResourceWhen(func(context.Context, Target, Resource, ResultStore) string { return "x" }),
 		Run:  func(context.Context, Target, ResultStore) (Result, error) { return Result{}, nil },
 	})
-	if err == nil {
-		t.Fatal("Run accepted SkipResourceWhen on a ScopeGlobal check")
+}
+
+func TestEngine_RejectsMissingRunFunction(t *testing.T) {
+	requireInvalidCheck(t, Check{ID: "no-run", Scope: ScopeGlobal})
+	requireInvalidCheck(t, Check{ID: "no-run-resource", Scope: ScopePerResource})
+	requireInvalidCheck(t, Check{ID: "no-run-variant", Scope: ScopeGlobal, Variants: []string{"a"}})
+	requireInvalidCheck(t, Check{ID: "no-run-resource-variant", Scope: ScopePerResource, Variants: []string{"a"}})
+}
+
+func TestEngine_RegisterRejectsInvalidCheckAtomically(t *testing.T) {
+	e := New()
+	ok := globalCheck("ok", nil, func(context.Context, Target, ResultStore) (Result, error) { return Result{}, nil })
+	if err := e.Register(ok, Check{ID: idBroken, Scope: ScopeGlobal}); err == nil {
+		t.Fatal("Register accepted a check with no Run")
+	}
+	if err := e.Register(ok); err != nil {
+		t.Errorf("a rejected batch left %q registered: %v", "ok", err)
+	}
+}
+
+func TestEngine_NewDefersInvalidWithChecksToRun(t *testing.T) {
+	e := New(WithChecks(Check{ID: idBroken, Scope: ScopeGlobal}))
+	if _, err := e.Run(context.Background(), Target{}); err == nil {
+		t.Error("Run ran despite an invalid WithChecks check")
 	}
 }
 
@@ -263,5 +300,26 @@ func TestEngine_DuplicateResourceIDsRunOnce(t *testing.T) {
 	}
 	if summary.Executed != 4 { // d1, d2 + 2 resources
 		t.Errorf("Executed = %d, want 4", summary.Executed)
+	}
+}
+
+func TestResult_Status(t *testing.T) {
+	tests := []struct {
+		name   string
+		result Result
+		want   ResultStatus
+	}{
+		{"passed", Result{}, StatusPassed},
+		{"observations", Result{Observations: []Observation{{Title: "x"}}}, StatusFailed},
+		{"is skipped", Result{Skipped: true}, StatusSkipped},
+		{"error", Result{Err: errors.New("boom")}, StatusError},
+		{"error beats skipped", Result{Skipped: true, Err: errors.New("boom")}, StatusError},
+		{"error beats observations", Result{Err: errors.New("boom"), Observations: []Observation{{Title: "x"}}}, StatusError},
+		{"skipped beats observations", Result{Skipped: true, Observations: []Observation{{Title: "x"}}}, StatusSkipped},
+	}
+	for _, tt := range tests {
+		if got := tt.result.Status(); got != tt.want {
+			t.Errorf("%s: Status() = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }

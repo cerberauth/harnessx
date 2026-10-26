@@ -1,82 +1,59 @@
 package harnessx
 
-type graph struct {
-	checks   []Check
-	inDegree map[CheckID]int
-	adjList  map[CheckID][]CheckID
-	byID     map[CheckID]Check
-}
-
-func newGraph(checks []Check) (*graph, error) {
+// levels groups checks into parallel execution levels (Kahn's algorithm): every
+// check in a level depends only on checks in earlier levels. It returns
+// ErrUnknownDependency if a check depends on an ID that is not in checks, and
+// ErrCycleDetected if the dependencies form a cycle.
+func levels(checks []Check) ([][]Check, error) {
 	byID := make(map[CheckID]Check, len(checks))
 	for _, c := range checks {
 		byID[c.ID] = c
 	}
 
 	inDegree := make(map[CheckID]int, len(checks))
-	adjList := make(map[CheckID][]CheckID, len(checks))
-
+	dependents := make(map[CheckID][]CheckID, len(checks))
 	for _, c := range checks {
-		if _, exists := inDegree[c.ID]; !exists {
-			inDegree[c.ID] = 0
-		}
+		inDegree[c.ID] += 0
 		for _, dep := range c.DependsOn {
 			if _, ok := byID[dep]; !ok {
 				return nil, ErrUnknownDependency
 			}
-			adjList[dep] = append(adjList[dep], c.ID)
+			dependents[dep] = append(dependents[dep], c.ID)
 			inDegree[c.ID]++
 		}
 	}
 
-	return &graph{
-		checks:   checks,
-		inDegree: inDegree,
-		adjList:  adjList,
-		byID:     byID,
-	}, nil
-}
-
-// topoSort returns checks grouped into parallel execution levels (Kahn's algorithm).
-func (g *graph) topoSort() ([][]Check, error) {
-	inDeg := make(map[CheckID]int, len(g.inDegree))
-	for id, d := range g.inDegree {
-		inDeg[id] = d
-	}
-
 	var queue []CheckID
-	for _, c := range g.checks {
-		if inDeg[c.ID] == 0 {
+	for _, c := range checks {
+		if inDegree[c.ID] == 0 {
 			queue = append(queue, c.ID)
 		}
 	}
 
-	var levels [][]Check
+	var out [][]Check
 	visited := 0
-
 	for len(queue) > 0 {
 		level := make([]Check, 0, len(queue))
 		for _, id := range queue {
-			level = append(level, g.byID[id])
+			level = append(level, byID[id])
 		}
-		levels = append(levels, level)
+		out = append(out, level)
 		visited += len(queue)
 
 		var next []CheckID
 		for _, id := range queue {
-			for _, dep := range g.adjList[id] {
-				inDeg[dep]--
-				if inDeg[dep] == 0 {
-					next = append(next, dep)
+			for _, dependent := range dependents[id] {
+				inDegree[dependent]--
+				if inDegree[dependent] == 0 {
+					next = append(next, dependent)
 				}
 			}
 		}
 		queue = next
 	}
 
-	if visited != len(g.checks) {
+	if visited != len(checks) {
 		return nil, ErrCycleDetected
 	}
-
-	return levels, nil
+	return out, nil
 }

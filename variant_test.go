@@ -387,12 +387,7 @@ func TestEngine_Variants_GlobalScope_MissingRunVariant(t *testing.T) {
 		Scope:    ScopeGlobal,
 		Variants: []string{"a"},
 	}
-	if err := e.Register(chk); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-
-	_, err := e.Run(context.Background(), testTarget)
-	if err == nil {
+	if err := e.Register(chk); err == nil {
 		t.Fatal("expected error for missing RunVariant, got nil")
 	}
 }
@@ -404,12 +399,7 @@ func TestEngine_Variants_ResourceScope_MissingRunResourceVariant(t *testing.T) {
 		Scope:    ScopePerResource,
 		Variants: []string{"a"},
 	}
-	if err := e.Register(chk); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-
-	_, err := e.Run(context.Background(), testTarget)
-	if err == nil {
+	if err := e.Register(chk); err == nil {
 		t.Fatal("expected error for missing RunResourceVariant, got nil")
 	}
 }

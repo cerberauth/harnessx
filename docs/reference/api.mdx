@@ -93,6 +93,21 @@ type Result struct {
 
 Observations report findings and do not by themselves fail a check; only a non-nil `Err` does.
 
+`Result.Status()` classifies a result as one of four `ResultStatus` values. An error wins over everything else, then skipped, then observations:
+
+```go
+const (
+  StatusPassed  ResultStatus = "passed"  // ran, no error, no observations
+  StatusFailed  ResultStatus = "failed"  // ran without error but made observations
+  StatusSkipped ResultStatus = "skipped"
+  StatusError   ResultStatus = "error"   // returned an error or panicked
+)
+
+func (r Result) Status() ResultStatus
+```
+
+`IfCheckPassed`, the scan summary counts and the OpenTelemetry `status` attribute all use it.
+
 ### Attempt / VariantMode
 
 The outcome of a single variant of a `Variants` check — see [Check](#check) and [NewVariantCheck / NewVariantResourceCheck](#newvariantcheck--newvariantresourcecheck).
@@ -277,7 +292,7 @@ func WithBearerToken(token string) RequestMutator                // Authorizatio
 func WithBasicAuth(username, password string) RequestMutator     // Authorization: Basic <base64>
 func WithAPIKeyHeader(name, value string) RequestMutator          // arbitrary header, e.g. X-API-Key
 func WithAPIKeyQuery(name, value string) RequestMutator           // arbitrary query param
-func WithAuthCookie(name, value string) RequestMutator            // cookie, Secure+HttpOnly+SameSite=Strict
+func WithAuthCookie(name, value string) RequestMutator            // cookie (name and value only)
 func WithFormCredential(name, value string) RequestMutator        // urlencoded form body field, switches method to POST
 ```
 
@@ -349,7 +364,7 @@ func DoResponse(ctx context.Context, client *http.Client, req *http.Request, opt
 func Do(ctx context.Context, client *http.Client, req *http.Request) (statusCode int, header http.Header, body []byte, duration time.Duration, err error)
 ```
 
-`Do` is `DoResponse` with the default cap and no truncation signal; prefer `DoResponse`.
+`Do` is deprecated: it is `DoResponse` with the default cap and no truncation signal. Use `DoResponse`.
 
 ### CaptureSnapshot
 
@@ -714,9 +729,10 @@ func (e *Engine) Register(checks ...Check) error
 ```
 
 **Returns:**
-- `ErrDuplicateCheckID`, wrapped with the ID, if a check with the same ID is already registered or repeated in `checks`. Registration is all or nothing: no check from `checks` is added when one is rejected.
+- `ErrDuplicateCheckID`, wrapped with the ID, if a check with the same ID is already registered or repeated in `checks`.
+- an error naming the check if it cannot run: an unknown `Scope`, a per-resource skip decision (`SkipResourceWhen`) on a `ScopeGlobal` check, or no run function for its `Scope` and `Variants`.
 
-Unknown dependencies and cycles are not detected here; they are reported by `Run`.
+Registration is all or nothing: no check from `checks` is added when one is rejected. Unknown dependencies and cycles span several checks, so they are reported by `Run`.
 
 **Example:**
 ```go
@@ -738,7 +754,7 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 - `ScanSummary` with counts of executed, failed and skipped checks. It is returned alongside any error, and `Reporter.OnScanComplete` is always called.
 - `ErrNoChecks` if no check is left to run
 - `ErrDuplicateCheckID`, `ErrUnknownDependency` or `ErrCycleDetected` for an invalid graph — including `ErrUnknownDependency` if `WithOnly`/`WithExclude` drops a check another selected check depends on, and `ErrDuplicateCheckID` for a duplicate among the `WithChecks` checks passed to `New`
-- an error for a check with an unknown `Scope`, a missing run function, or a per-resource skip decision (`SkipResourceWhen`) on a `ScopeGlobal` check
+- the same invalid-check errors as `Register`, for checks that never went through it (a `Scenario`'s checks)
 - the context's error if `ctx` is cancelled
 
 A failing or panicking check does not make `Run` return an error: it is counted in `ScanSummary.Failed` and its error is on its `Result`.

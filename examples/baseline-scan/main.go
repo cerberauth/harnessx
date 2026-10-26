@@ -69,17 +69,13 @@ func run() error {
 	srv := newVulnerableAPI()
 	defer srv.Close()
 
-	client := probe.New(probe.WithMaxRetries(0)).Client()
+	p := probe.New(probe.WithMaxRetries(0))
 
 	// capture performs an HTTP request and reduces it to a harnessx.Snapshot,
 	// keeping the full response (headers, body, duration) for comparators
 	// that need more than the status code.
 	capture := func(ctx context.Context, req *http.Request) (harnessx.Snapshot, error) {
-		statusCode, header, body, duration, err := probe.Do(ctx, client, req)
-		if err != nil {
-			return harnessx.Snapshot{}, err
-		}
-		return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
+		return harnessx.CaptureSnapshot(ctx, p, func(context.Context) (*http.Request, error) { return req, nil })
 	}
 
 	target := harnessx.Target{URL: srv.URL, Host: "local-test-api"}

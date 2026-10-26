@@ -10,7 +10,7 @@ func IfCheckPassed(id CheckID) Condition {
 		if !ok {
 			return false
 		}
-		return !r.Skipped && r.Err == nil && len(r.Observations) == 0
+		return r.Status() == StatusPassed
 	}
 }
 

@@ -2,6 +2,7 @@ package harnessx
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -105,6 +106,35 @@ type Result struct {
 	Data         any
 	Err          error
 	Attempts     []Attempt
+}
+
+// ResultStatus classifies a Result; see Result.Status.
+type ResultStatus string
+
+const (
+	// StatusPassed: the check ran, returned no error and made no observations.
+	StatusPassed ResultStatus = "passed"
+	// StatusFailed: the check ran without error but made observations.
+	StatusFailed ResultStatus = "failed"
+	// StatusSkipped: the check, or the resource, was skipped.
+	StatusSkipped ResultStatus = "skipped"
+	// StatusError: the check returned an error or panicked.
+	StatusError ResultStatus = "error"
+)
+
+// Status classifies r. An error wins over everything else, so a failed check is
+// never reported as skipped or passed; then skipped; then observations.
+func (r Result) Status() ResultStatus {
+	switch {
+	case r.Err != nil:
+		return StatusError
+	case r.Skipped:
+		return StatusSkipped
+	case len(r.Observations) > 0:
+		return StatusFailed
+	default:
+		return StatusPassed
+	}
 }
 
 // Attempt is the outcome of one variant of a check with Variants, recorded in
@@ -220,4 +250,79 @@ type Check struct {
 
 	Timeout     time.Duration
 	Concurrency int
+}
+
+// skipReason returns why c should not run against store, or "" if it should:
+// its Skip decision first, then its Conditions.
+func (c Check) skipReason(ctx context.Context, target Target, store ResultStore) string {
+	if reason := c.Skip.Eval(ctx, target, store); reason != "" {
+		return reason
+	}
+	for _, cond := range c.Conditions {
+		if !cond(store) {
+			return "condition not met"
+		}
+	}
+	return ""
+}
+
+// validate reports a configuration error in c that would stop it from running:
+// an unknown Scope, a per-resource skip decision on a global check, or a
+// missing run function for its Scope and Variants.
+func (c Check) validate() error {
+	if c.Scope != ScopeGlobal && c.Scope != ScopePerResource {
+		return fmt.Errorf("harnessx: check %q has invalid Scope %d", c.ID, c.Scope)
+	}
+	if c.Scope == ScopeGlobal && c.Skip.resourceFn != nil {
+		return fmt.Errorf("harnessx: check %q has ScopeGlobal but a per-resource Skip decision (SkipResourceWhen); use SkipWhen", c.ID)
+	}
+
+	var run, field string
+	switch {
+	case c.Scope == ScopeGlobal && len(c.Variants) > 0:
+		run, field = "RunVariant", "ScopeGlobal with Variants"
+		if c.RunVariant != nil {
+			return nil
+		}
+	case c.Scope == ScopeGlobal:
+		run, field = "Run", "ScopeGlobal"
+		if c.Run != nil {
+			return nil
+		}
+	case len(c.Variants) > 0:
+		run, field = "RunResourceVariant", "ScopePerResource with Variants"
+		if c.RunResourceVariant != nil {
+			return nil
+		}
+	default:
+		run, field = "RunResource", "ScopePerResource"
+		if c.RunResource != nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("harnessx: check %q has %s but no %s set", c.ID, field, run)
+}
+
+// invoke returns the function that executes c once: for res, or for the whole
+// target when res is nil. It picks between the plain and the variant run
+// functions, so callers need not branch on Variants.
+func (c Check) invoke(target Target, store ResultStore, res *Resource) func(context.Context) (Result, error) {
+	switch {
+	case res == nil && len(c.Variants) == 0:
+		return func(ctx context.Context) (Result, error) { return c.Run(ctx, target, store) }
+	case res == nil:
+		return func(ctx context.Context) (Result, error) {
+			return RunVariants(ctx, c.Variants, c.VariantMode, func(vctx context.Context, variant string) (Result, error) {
+				return c.RunVariant(vctx, target, variant, store)
+			}), nil
+		}
+	case len(c.Variants) == 0:
+		return func(ctx context.Context) (Result, error) { return c.RunResource(ctx, target, *res, store) }
+	default:
+		return func(ctx context.Context) (Result, error) {
+			return RunVariants(ctx, c.Variants, c.VariantMode, func(vctx context.Context, variant string) (Result, error) {
+				return c.RunResourceVariant(vctx, target, *res, variant, store)
+			}), nil
+		}
+	}
 }

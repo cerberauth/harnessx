@@ -18,11 +18,13 @@ type Snapshot struct {
   Body       []byte
   Duration   time.Duration
   Data       any
+  Truncated  bool   // Body was cut at probe.DefaultMaxBodySize
+  BodyHash   uint64 // SimHash of Body, set by CaptureSnapshot
 }
 type Baseline = Snapshot
 ```
 
-`StatusCode` is what the default comparator looks at. `Header`, `Body`, and `Duration` carry the full response; `Data` carries anything else custom comparators need.
+`StatusCode` is what the default comparator looks at. `Header`, `Body`, and `Duration` carry the full response; `Data` carries anything else custom comparators need. `harnessx.CaptureSnapshot(ctx, p, build)` builds a `Snapshot` from a `probe.Probe` and a `probe.RequestBuilder` for you (the snippets below use it, with `p := probe.New()`).
 
 ## Baseline-probe workflow
 
@@ -34,11 +36,7 @@ probeCheck := harnessx.NewCaptureBaselineCheck(harnessx.CaptureBaselineCheckConf
   Name:      "Baseline Probe",
   DependsOn: []harnessx.CheckID{"discovery"},
   Capture: func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-    statusCode, header, body, duration, err := probe.Do(ctx, client, unauthenticatedRequest(r.URL))
-    if err != nil {
-      return harnessx.Snapshot{}, err
-    }
-    return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
+    return harnessx.CaptureSnapshot(ctx, p, unauthenticatedRequest(r.URL)) // unauthenticatedRequest returns a probe.RequestBuilder
   },
 })
 
@@ -47,11 +45,7 @@ compareCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
   DependsOn: []harnessx.CheckID{"baseline-probe"},
   Baseline:  harnessx.BaselineFromCheck("baseline-probe"),
   Capture: func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-    statusCode, header, body, duration, err := probe.Do(ctx, client, attackerRequest(r.URL))
-    if err != nil {
-      return harnessx.Snapshot{}, err
-    }
-    return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
+    return harnessx.CaptureSnapshot(ctx, p, attackerRequest(r.URL)) // attackerRequest returns a probe.RequestBuilder
   },
 })
 ```
@@ -155,11 +149,7 @@ For targets with no per-resource dimension — a single token, a single endpoint
 ```go
 probeCheck := harnessx.CaptureGlobalBaselineCheck("baseline-probe", "Baseline Probe",
   func(ctx context.Context, t harnessx.Target, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-    statusCode, header, body, duration, err := probe.Do(ctx, client, unauthenticatedRequest(t.URL))
-    if err != nil {
-      return harnessx.Snapshot{}, err
-    }
-    return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
+    return harnessx.CaptureSnapshot(ctx, p, unauthenticatedRequest(t.URL)) // unauthenticatedRequest returns a probe.RequestBuilder
   })
 
 compareCheck := harnessx.NewGlobalBaselineCheck(harnessx.GlobalBaselineCheckConfig{
@@ -167,11 +157,7 @@ compareCheck := harnessx.NewGlobalBaselineCheck(harnessx.GlobalBaselineCheckConf
   DependsOn: []harnessx.CheckID{"baseline-probe"},
   Baseline:  harnessx.BaselineFromGlobalCheck("baseline-probe"),
   Capture: func(ctx context.Context, t harnessx.Target, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
-    statusCode, header, body, duration, err := probe.Do(ctx, client, attackerRequest(t.URL))
-    if err != nil {
-      return harnessx.Snapshot{}, err
-    }
-    return harnessx.Snapshot{StatusCode: statusCode, Header: header, Body: body, Duration: duration}, nil
+    return harnessx.CaptureSnapshot(ctx, p, attackerRequest(t.URL)) // attackerRequest returns a probe.RequestBuilder
   },
 })
 ```

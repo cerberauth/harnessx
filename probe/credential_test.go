@@ -56,7 +56,7 @@ func TestWithAPIKeyQuery_SetsQueryParam(t *testing.T) {
 	}
 }
 
-func TestWithAuthCookie_SetsSecureCookie(t *testing.T) {
+func TestWithAuthCookie_SetsCookie(t *testing.T) {
 	req, err := NewRequest(context.Background(), "GET", "http://example.com", nil, WithAuthCookie("session", testCredentialValue))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

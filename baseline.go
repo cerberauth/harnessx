@@ -166,11 +166,6 @@ type BaselineCheckConfig struct {
 // cfg.Compare (CompareStatusCode by default). A resource with no resolvable
 // baseline is skipped rather than compared.
 func NewBaselineCheck(cfg BaselineCheckConfig) Check {
-	compare := cfg.Compare
-	if compare == nil {
-		compare = CompareStatusCode
-	}
-
 	return Check{
 		ID:          cfg.ID,
 		Name:        cfg.Name,
@@ -190,14 +185,33 @@ func NewBaselineCheck(cfg BaselineCheckConfig) Check {
 				return Result{}, err
 			}
 
-			obs := compare(baseline, current)
-			for i := range obs {
-				obs[i].CheckID = cfg.ID
-				obs[i].ResourceID = resource.ID
-			}
-			return Result{Observations: obs}, nil
+			return Result{Observations: compareSnapshots(cfg.Compare, baseline, current, cfg.ID, resource.ID)}, nil
 		},
 	}
+}
+
+// compareSnapshots runs compare (CompareStatusCode when nil) and stamps the
+// resulting observations with the check and resource they belong to. It is the
+// comparison step shared by the per-resource and global baseline checks.
+func compareSnapshots(compare BaselineComparator, baseline, current Snapshot, id CheckID, resourceID string) []Observation {
+	if compare == nil {
+		compare = CompareStatusCode
+	}
+	obs := compare(baseline, current)
+	for i := range obs {
+		obs[i].CheckID = id
+		obs[i].ResourceID = resourceID
+	}
+	return obs
+}
+
+// captureResult turns a captured Snapshot into the Result of a baseline probe,
+// carrying it as Data for BaselineFromCheck / BaselineFromGlobalCheck.
+func captureResult(snap Snapshot, err error) (Result, error) {
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Data: snap}, nil
 }
 
 // CaptureBaselineCheckConfig configures a baseline-capture check built by
@@ -232,11 +246,7 @@ func NewCaptureBaselineCheck(cfg CaptureBaselineCheckConfig) Check {
 		Timeout:     cfg.Timeout,
 		Concurrency: cfg.Concurrency,
 		RunResource: func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error) {
-			snap, err := cfg.Capture(ctx, target, resource, store)
-			if err != nil {
-				return Result{}, err
-			}
-			return Result{Data: snap}, nil
+			return captureResult(cfg.Capture(ctx, target, resource, store))
 		},
 	}
 }
@@ -295,11 +305,6 @@ type GlobalBaselineCheckConfig struct {
 // for targets with no per-resource dimension (see BaselineCheckConfig for the
 // ScopePerResource variant).
 func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check {
-	compare := cfg.Compare
-	if compare == nil {
-		compare = CompareStatusCode
-	}
-
 	return Check{
 		ID:          cfg.ID,
 		Name:        cfg.Name,
@@ -318,11 +323,7 @@ func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check {
 				return Result{}, err
 			}
 
-			obs := compare(baseline, current)
-			for i := range obs {
-				obs[i].CheckID = cfg.ID
-			}
-			return Result{Observations: obs}, nil
+			return Result{Observations: compareSnapshots(cfg.Compare, baseline, current, cfg.ID, "")}, nil
 		},
 	}
 }
@@ -352,11 +353,7 @@ func NewCaptureGlobalBaselineCheck(cfg CaptureGlobalBaselineCheckConfig) Check {
 		Scope:       ScopeGlobal,
 		Timeout:     cfg.Timeout,
 		Run: func(ctx context.Context, target Target, store ResultStore) (Result, error) {
-			snap, err := cfg.Capture(ctx, target, store)
-			if err != nil {
-				return Result{}, err
-			}
-			return Result{Data: snap}, nil
+			return captureResult(cfg.Capture(ctx, target, store))
 		},
 	}
 }
