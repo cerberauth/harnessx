@@ -1,10 +1,39 @@
 version: "2"
 linters:
   enable:
+    - bodyclose
+    - contextcheck
+    - errorlint
     - goconst
     - gocritic
     - gosec
+    - noctx
+    - prealloc
+    - revive
+    - unparam
   settings:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: redefines-builtin-id
     gosec:
       excludes:
         - G107
@@ -14,10 +43,14 @@ linters:
       - comments
       - common-false-positives
       - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - bodyclose
+          - noctx
     paths:
       - third_party$
       - builtin$
-      - examples$
 formatters:
   enable:
     - gofmt
@@ -27,4 +60,3 @@ formatters:
     paths:
       - third_party$
       - builtin$
-      - examples$

@@ -48,19 +48,19 @@ func WithFilter(keep func(Check) bool) RunOption {
 	}
 }
 
-// WithMinCVSSScore keeps only checks whose CVSSScore is >= min.
-func WithMinCVSSScore(min float64) RunOption {
-	return WithFilter(func(c Check) bool { return c.CVSSScore >= min })
+// WithMinCVSSScore keeps only checks whose CVSSScore is >= minScore.
+func WithMinCVSSScore(minScore float64) RunOption {
+	return WithFilter(func(c Check) bool { return c.CVSSScore >= minScore })
 }
 
-// WithMaxCVSSScore keeps only checks whose CVSSScore is <= max.
-func WithMaxCVSSScore(max float64) RunOption {
-	return WithFilter(func(c Check) bool { return c.CVSSScore <= max })
+// WithMaxCVSSScore keeps only checks whose CVSSScore is <= maxScore.
+func WithMaxCVSSScore(maxScore float64) RunOption {
+	return WithFilter(func(c Check) bool { return c.CVSSScore <= maxScore })
 }
 
-// WithCVSSScoreRange keeps only checks whose CVSSScore is within [min, max].
-func WithCVSSScoreRange(min, max float64) RunOption {
-	return WithFilter(func(c Check) bool { return c.CVSSScore >= min && c.CVSSScore <= max })
+// WithCVSSScoreRange keeps only checks whose CVSSScore is within [minScore, maxScore].
+func WithCVSSScoreRange(minScore, maxScore float64) RunOption {
+	return WithFilter(func(c Check) bool { return c.CVSSScore >= minScore && c.CVSSScore <= maxScore })
 }
 
 // WithCVSSVector keeps only checks whose CVSSVector exactly matches one of

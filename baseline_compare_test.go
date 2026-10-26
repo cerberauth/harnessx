@@ -2,6 +2,7 @@ package harnessx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -140,7 +141,7 @@ func TestCaptureSnapshot(t *testing.T) {
 func TestCaptureSnapshot_BuildError(t *testing.T) {
 	boom := fmt.Errorf("boom")
 	_, err := CaptureSnapshot(context.Background(), probe.New(), func(context.Context) (*http.Request, error) { return nil, boom })
-	if err != boom {
+	if !errors.Is(err, boom) {
 		t.Errorf("err = %v, want %v", err, boom)
 	}
 }
