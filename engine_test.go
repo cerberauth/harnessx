@@ -382,11 +382,7 @@ func TestEngine_ScopePerResourceWithoutRunResource(t *testing.T) {
 		Scope: ScopePerResource,
 		// RunResource intentionally not set
 	}
-	if err := e.Register(chk); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	_, err := e.Run(context.Background(), testTarget)
-	if err == nil {
+	if err := e.Register(chk); err == nil {
 		t.Error("expected error for ScopePerResource without RunResource")
 	}
 }

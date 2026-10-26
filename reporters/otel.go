@@ -107,6 +107,8 @@ func NewOTelReporter(ctx context.Context, tracer trace.Tracer, meter metric.Mete
 	}, nil
 }
 
+// OnScanStart does nothing: the scan span is started in OnScanComplete, once the
+// scan's duration is known.
 func (o *OTelReporter) OnScanStart(_ harnessx.Target, _ int) {}
 
 func (o *OTelReporter) OnCheckStart(check harnessx.Check, _ harnessx.Target, resource *harnessx.Resource) {
@@ -161,7 +163,7 @@ func (o *OTelReporter) OnCheckComplete(result harnessx.Result) {
 		span.End()
 	}
 
-	status := checkStatus(result)
+	status := string(result.Status())
 
 	o.checkCounter.Add(o.baseCtx, 1,
 		metric.WithAttributes(
@@ -204,17 +206,4 @@ func (o *OTelReporter) OnScanComplete(summary harnessx.ScanSummary) {
 	span.End(trace.WithTimestamp(time.Now()))
 
 	o.scanDuration.Record(o.baseCtx, summary.Duration.Seconds())
-}
-
-func checkStatus(r harnessx.Result) string {
-	switch {
-	case r.Skipped:
-		return "skipped"
-	case r.Err != nil:
-		return "error"
-	case len(r.Observations) > 0:
-		return "failed"
-	default:
-		return "passed"
-	}
 }

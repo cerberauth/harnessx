@@ -40,16 +40,13 @@ func WithAPIKeyQuery(name, value string) RequestMutator {
 	return WithQuery(name, value)
 }
 
-// WithAuthCookie attaches a session/auth cookie with secure defaults
-// (Secure, HttpOnly, SameSite=Strict).
+// WithAuthCookie attaches a session/auth cookie. Only the name and value are
+// sent: Secure, HttpOnly and SameSite are Set-Cookie attributes that a request's
+// Cookie header does not carry.
 func WithAuthCookie(name, value string) RequestMutator {
-	return WithCookie(&http.Cookie{
-		Name:     name,
-		Value:    value,
-		Secure:   true,
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-	})
+	// G124: a request's Cookie header carries only name=value; Secure, HttpOnly
+	// and SameSite are Set-Cookie attributes.
+	return WithCookie(&http.Cookie{Name: name, Value: value}) //nolint:gosec
 }
 
 // WithFormCredential places name=value as a urlencoded form body field,
@@ -163,11 +160,11 @@ func ApplyCredential(req *http.Request, value string, loc CredentialLocation) (*
 		removeCookie(out, loc.Name)
 		mutator = WithAuthCookie(loc.Name, value)
 	case CredentialLocationQuery:
-		mutator = WithAPIKeyQuery(loc.Name, value)
+		mutator = WithQuery(loc.Name, value)
 	case CredentialLocationBody:
 		mutator = WithFormCredential(loc.Name, value)
 	default:
-		mutator = WithAPIKeyHeader(loc.Name, value)
+		mutator = WithHeader(loc.Name, value)
 	}
 	if err := mutator(out); err != nil {
 		return nil, err

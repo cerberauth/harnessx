@@ -46,7 +46,10 @@ func WithMaxBodySize(n int64) DoOption {
 // Do sends req via client and returns the response's status code, headers,
 // fully-drained body, and duration. The response body is read, up to
 // DefaultMaxBodySize bytes, and closed before Do returns; anything beyond the
-// cap is dropped silently. Use DoResponse to detect truncation or change the cap.
+// cap is dropped silently.
+//
+// Deprecated: Use DoResponse, which returns the same data as one Response, also
+// reports truncation, and accepts options such as WithMaxBodySize.
 func Do(ctx context.Context, client *http.Client, req *http.Request) (statusCode int, header http.Header, body []byte, duration time.Duration, err error) {
 	resp, err := DoResponse(ctx, client, req)
 	if err != nil {

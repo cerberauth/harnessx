@@ -2,11 +2,10 @@ package harnessx
 
 import (
 	"fmt"
-	"hash/fnv"
 	"math"
 	"math/bits"
-	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const titleBaselineDeviation = "Response deviates from baseline"
@@ -82,21 +81,36 @@ func (s Snapshot) bodyHash() uint64 {
 func SimHash(body []byte) uint64 {
 	var weights [64]int
 	tokens := 0
-	for _, tok := range strings.FieldsFunc(string(body), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	}) {
-		h := fnv.New64a()
-		_, _ = h.Write([]byte(strings.ToLower(tok)))
-		sum := h.Sum64()
-		for i := range weights {
-			if sum&(1<<uint(i)) != 0 {
-				weights[i]++
-			} else {
-				weights[i]--
+
+	// Tokens are hashed on the fly with FNV-1a over their lower-cased UTF-8, so
+	// no per-token string or hasher is allocated, whatever the body size.
+	hash := uint64(fnvOffset64)
+	inToken := false
+	var enc [utf8.UTFMax]byte
+
+	for i := 0; i < len(body); {
+		r, size := utf8.DecodeRune(body[i:])
+		i += size
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			n := utf8.EncodeRune(enc[:], unicode.ToLower(r))
+			for _, c := range enc[:n] {
+				hash ^= uint64(c)
+				hash *= fnvPrime64
 			}
+			inToken = true
+			continue
 		}
+		if inToken {
+			addTokenHash(&weights, hash)
+			tokens++
+			hash, inToken = fnvOffset64, false
+		}
+	}
+	if inToken {
+		addTokenHash(&weights, hash)
 		tokens++
 	}
+
 	if tokens == 0 {
 		return 0
 	}
@@ -107,6 +121,24 @@ func SimHash(body []byte) uint64 {
 		}
 	}
 	return out
+}
+
+// FNV-1a 64-bit parameters.
+const (
+	fnvOffset64 = 14695981039346656037
+	fnvPrime64  = 1099511628211
+)
+
+// addTokenHash votes each bit of a token's hash into weights: up for a set bit,
+// down for a clear one.
+func addTokenHash(weights *[64]int, sum uint64) {
+	for i := range weights {
+		if sum&(1<<uint(i)) != 0 {
+			weights[i]++
+		} else {
+			weights[i]--
+		}
+	}
 }
 
 // simHashSimilarity maps two SimHashes to [0, 1]: 1 for equal hashes, 0 when
