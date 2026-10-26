@@ -5,7 +5,14 @@ import "github.com/cerberauth/harnessx"
 // NoopReporter is a Reporter that discards all events.
 type NoopReporter struct{}
 
-func (NoopReporter) OnScanStart(harnessx.Target, int)                                 {}
+// OnScanStart does nothing.
+func (NoopReporter) OnScanStart(harnessx.Target, int) {}
+
+// OnCheckStart does nothing.
 func (NoopReporter) OnCheckStart(harnessx.Check, harnessx.Target, *harnessx.Resource) {}
-func (NoopReporter) OnCheckComplete(harnessx.Result)                                  {}
-func (NoopReporter) OnScanComplete(harnessx.ScanSummary)                              {}
+
+// OnCheckComplete does nothing.
+func (NoopReporter) OnCheckComplete(harnessx.Result) {}
+
+// OnScanComplete does nothing.
+func (NoopReporter) OnScanComplete(harnessx.ScanSummary) {}

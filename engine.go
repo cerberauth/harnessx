@@ -109,6 +109,13 @@ type Engine struct {
 	mu     sync.RWMutex
 }
 
+// New returns an Engine configured by opts. By default it runs as many checks,
+// and as many resources per check, concurrently as there are CPUs, with a 30
+// second check timeout and no reporters.
+//
+// Checks passed with WithChecks are registered immediately. New cannot report
+// a registration error such as a duplicate check ID, so use Register when you
+// need to see one.
 func New(opts ...Option) *Engine {
 	cfg := defaultConfig()
 	for _, o := range opts {

@@ -211,10 +211,13 @@ The `reporters` sub-package provides `OTelReporter`, which emits spans and metri
 ```go
 import "github.com/cerberauth/harnessx/reporters"
 
-otelReporter := reporters.NewOTelReporter(ctx, tracer, meter)
+otelReporter, err := reporters.NewOTelReporter(ctx, tracer, meter)
+if err != nil {
+  log.Fatal(err)
+}
 
 // Optional: override the default "harnessx" metric/span prefix
-otelReporter := reporters.NewOTelReporter(ctx, tracer, meter,
+otelReporter, err = reporters.NewOTelReporter(ctx, tracer, meter,
   reporters.WithPrefix("myapp"),
 )
 

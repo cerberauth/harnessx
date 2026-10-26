@@ -26,7 +26,7 @@
 | Structured observations | Checks emit typed observations with title, description, evidence, and free-form metadata |
 | Scenarios | Run named check subsets (REST scan, GraphQL scan) without executing all registered checks |
 | Baseline comparison | Capture an expected response per resource and flag deviations, with pluggable comparison logic |
-| Zero dependencies | Core engine (root package) is pure Go standard library; optional subpackages (`reporters`, `checkdef`) pull in their own deps only when imported |
+| Minimal dependencies | The root package needs only `golang.org/x/time` (for `probe`'s rate limiter); the YAML/TOML parsers and OpenTelemetry are compiled in only when you import `checkdef` / `reporters` |
 
 ---
 
@@ -36,7 +36,7 @@
 go get github.com/cerberauth/harnessx
 ```
 
-Requires **Go 1.22+**.
+Requires **Go 1.26+**.
 
 ---
 
@@ -225,7 +225,7 @@ var Check = checkdef.NewCheck(def, run,
 )
 ```
 
-`checkdef` is a separate package from root `harnessx` so the core engine keeps its zero-dependency guarantee — the YAML/TOML parsers are only pulled in by code that imports `checkdef`.
+`checkdef` is a separate package (in the same module) from root `harnessx`, so the YAML/TOML parsers are only compiled into binaries that import `checkdef`.
 
 ### Scopes
 

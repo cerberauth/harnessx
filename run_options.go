@@ -63,8 +63,8 @@ func WithCVSSScoreRange(minScore, maxScore float64) RunOption {
 	return WithFilter(func(c Check) bool { return c.CVSSScore >= minScore && c.CVSSScore <= maxScore })
 }
 
-// WithCVSSVector keeps only checks whose CVSSVector exactly matches one of
-// the given vectors.
+// WithCVSSVector keeps only checks whose CVSSVector equals one of the given
+// vectors, ignoring case.
 func WithCVSSVector(vectors ...string) RunOption {
 	return WithFilter(func(c Check) bool { return inFold(c.CVSSVector, vectors) })
 }

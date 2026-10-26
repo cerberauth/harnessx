@@ -24,6 +24,7 @@ func defaultConfig() engineConfig {
 	}
 }
 
+// Option configures an Engine; see New.
 type Option func(*engineConfig)
 
 // WithMaxConcurrency sets the maximum number of checks run concurrently
@@ -50,6 +51,9 @@ func WithMaxResourceConcurrency(n int) Option {
 	}
 }
 
+// WithDefaultTimeout sets the timeout applied to checks that leave
+// Check.Timeout at zero. The default is 30 seconds; non-positive values are
+// ignored.
 func WithDefaultTimeout(d time.Duration) Option {
 	return func(cfg *engineConfig) {
 		if d > 0 {
@@ -66,6 +70,8 @@ func WithReporters(reporters ...Reporter) Option {
 	}
 }
 
+// WithChecks registers checks when the engine is created. A registration error
+// such as a duplicate ID is not reported; see Engine.Register.
 func WithChecks(checks ...Check) Option {
 	return func(cfg *engineConfig) {
 		cfg.initialChecks = append(cfg.initialChecks, checks...)
