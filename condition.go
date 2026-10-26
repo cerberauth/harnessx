@@ -1,8 +1,9 @@
 package harnessx
 
 // IfCheckPassed is true when check id ran, was not skipped, returned no error
-// and produced no observations. It is false when no result is recorded for id,
-// which includes any ScopePerResource check (see ResultStore).
+// and produced no observations. For a ScopePerResource check that holds across
+// all its resources (see ResultStore). It is false when no result is recorded
+// for id.
 func IfCheckPassed(id CheckID) Condition {
 	return func(store ResultStore) bool {
 		r, ok := store.Get(id)
@@ -13,9 +14,9 @@ func IfCheckPassed(id CheckID) Condition {
 	}
 }
 
-// IfCheckObserved is true when check id produced at least one observation. It
-// is false when no result is recorded for id, which includes any
-// ScopePerResource check (see ResultStore).
+// IfCheckObserved is true when check id produced at least one observation, for
+// a ScopePerResource check on any of its resources. It is false when no result
+// is recorded for id.
 func IfCheckObserved(id CheckID) Condition {
 	return func(store ResultStore) bool {
 		r, ok := store.Get(id)
@@ -26,9 +27,9 @@ func IfCheckObserved(id CheckID) Condition {
 	}
 }
 
-// IfCheckSkipped is true when check id was skipped. It is false when no result
-// is recorded for id, which includes any ScopePerResource check (see
-// ResultStore).
+// IfCheckSkipped is true when check id was skipped, for a ScopePerResource
+// check when every one of its resources was. It is false when no result is
+// recorded for id.
 func IfCheckSkipped(id CheckID) Condition {
 	return func(store ResultStore) bool {
 		r, ok := store.Get(id)

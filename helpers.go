@@ -24,8 +24,9 @@ func DataAs[T any](r Result) (T, bool) {
 }
 
 // GetData returns the Data of the result recorded for check id as a T. It
-// reports false if there is no such result — which includes any
-// ScopePerResource check, see ResultStore — or its Data is not a T.
+// reports false if there is no such result or its Data is not a T. A
+// ScopePerResource check's aggregate result carries no Data (see ResultStore),
+// so read per-resource Data with ResultStore.GetForResource and DataAs.
 func GetData[T any](store ResultStore, id CheckID) (T, bool) {
 	r, ok := store.Get(id)
 	if !ok {

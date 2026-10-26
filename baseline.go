@@ -2,6 +2,7 @@ package harnessx
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -111,6 +112,10 @@ func CaptureSnapshot(ctx context.Context, p *probe.Probe, build probe.RequestBui
 // stored under baselineID. It returns the current snapshot and whether the
 // response deviated from the baseline.
 //
+// If no baseline is stored under baselineID it returns the current snapshot, no
+// deviation, and ErrNoBaseline, rather than comparing against an empty
+// Snapshot.
+//
 // With no comparators, only a change in status code counts as a deviation
 // (CompareStatusCode). Otherwise every comparator is applied and the response
 // deviates if any of them reports an observation, so comparators compose.
@@ -123,7 +128,10 @@ func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.Re
 	if len(comparators) == 0 {
 		comparators = []BaselineComparator{CompareStatusCode}
 	}
-	baseline, _ := GetData[Snapshot](store, baselineID)
+	baseline, ok := GetData[Snapshot](store, baselineID)
+	if !ok {
+		return current, false, fmt.Errorf("%w: check %q", ErrNoBaseline, baselineID)
+	}
 	for _, compare := range comparators {
 		if len(compare(baseline, current)) > 0 {
 			return current, true, nil
@@ -192,23 +200,52 @@ func NewBaselineCheck(cfg BaselineCheckConfig) Check {
 	}
 }
 
-// CaptureBaselineCheck builds a ScopePerResource Check that captures a
-// Snapshot per resource via capture and stores it as Result.Data — the
-// "baseline probe". Pair it with BaselineFromCheck(id) and a DependsOn on
-// this check's id in the comparison check.
-func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check {
+// CaptureBaselineCheckConfig configures a baseline-capture check built by
+// NewCaptureBaselineCheck.
+type CaptureBaselineCheckConfig struct {
+	ID          CheckID
+	Name        string
+	Description string
+
+	// DependsOn must include the check that discovers the resources, or the
+	// capture check finds none and is skipped.
+	DependsOn []CheckID
+
+	// Capture performs the live attempt for one resource and returns its snapshot.
+	Capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)
+
+	Timeout     time.Duration
+	Concurrency int
+}
+
+// NewCaptureBaselineCheck builds a ScopePerResource Check that captures a
+// Snapshot per resource via cfg.Capture and stores it as Result.Data — the
+// "baseline probe". Pair it with BaselineFromCheck(cfg.ID) and a DependsOn on
+// this check's ID in the comparison check.
+func NewCaptureBaselineCheck(cfg CaptureBaselineCheckConfig) Check {
 	return Check{
-		ID:    id,
-		Name:  name,
-		Scope: ScopePerResource,
+		ID:          cfg.ID,
+		Name:        cfg.Name,
+		Description: cfg.Description,
+		DependsOn:   cfg.DependsOn,
+		Scope:       ScopePerResource,
+		Timeout:     cfg.Timeout,
+		Concurrency: cfg.Concurrency,
 		RunResource: func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error) {
-			snap, err := capture(ctx, target, resource, store)
+			snap, err := cfg.Capture(ctx, target, resource, store)
 			if err != nil {
 				return Result{}, err
 			}
 			return Result{Data: snap}, nil
 		},
 	}
+}
+
+// CaptureBaselineCheck is NewCaptureBaselineCheck with only an ID, a name and a
+// capture function. The returned Check has no DependsOn, so set DependsOn on it
+// to the check that discovers the resources before registering it.
+func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check {
+	return NewCaptureBaselineCheck(CaptureBaselineCheckConfig{ID: id, Name: name, Capture: capture})
 }
 
 // GlobalBaselineSource is the ScopeGlobal counterpart of BaselineSource: it
@@ -290,19 +327,42 @@ func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check {
 	}
 }
 
-// CaptureGlobalBaselineCheck is the ScopeGlobal counterpart of
-// CaptureBaselineCheck, for targets with no per-resource dimension.
-func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check {
+// CaptureGlobalBaselineCheckConfig is the ScopeGlobal counterpart of
+// CaptureBaselineCheckConfig.
+type CaptureGlobalBaselineCheckConfig struct {
+	ID          CheckID
+	Name        string
+	Description string
+	DependsOn   []CheckID
+
+	// Capture performs the live attempt and returns its snapshot.
+	Capture GlobalCapture
+
+	Timeout time.Duration
+}
+
+// NewCaptureGlobalBaselineCheck is the ScopeGlobal counterpart of
+// NewCaptureBaselineCheck, for targets with no per-resource dimension.
+func NewCaptureGlobalBaselineCheck(cfg CaptureGlobalBaselineCheckConfig) Check {
 	return Check{
-		ID:    id,
-		Name:  name,
-		Scope: ScopeGlobal,
+		ID:          cfg.ID,
+		Name:        cfg.Name,
+		Description: cfg.Description,
+		DependsOn:   cfg.DependsOn,
+		Scope:       ScopeGlobal,
+		Timeout:     cfg.Timeout,
 		Run: func(ctx context.Context, target Target, store ResultStore) (Result, error) {
-			snap, err := capture(ctx, target, store)
+			snap, err := cfg.Capture(ctx, target, store)
 			if err != nil {
 				return Result{}, err
 			}
 			return Result{Data: snap}, nil
 		},
 	}
+}
+
+// CaptureGlobalBaselineCheck is the ScopeGlobal counterpart of
+// CaptureBaselineCheck, for targets with no per-resource dimension.
+func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check {
+	return NewCaptureGlobalBaselineCheck(CaptureGlobalBaselineCheckConfig{ID: id, Name: name, Capture: capture})
 }

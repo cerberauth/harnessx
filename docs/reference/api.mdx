@@ -22,7 +22,7 @@ type Target struct {
 
 ### Resource
 
-Discovered by checks (via `Result.Resources`) and consumed by per-resource checks that depend on them. Resource IDs are expected to be unique across a run.
+Discovered by checks (via `Result.Resources`) and consumed by per-resource checks that depend on them. Resources are identified by `ID` across a run: when several checks emit the same `ID`, the first one discovered is kept and the others are dropped.
 
 ```go
 type Resource struct {
@@ -188,7 +188,20 @@ type BaselineCheckConfig struct {
 }
 
 func NewBaselineCheck(cfg BaselineCheckConfig) Check
-func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check
+
+// The "baseline probe": captures a Snapshot per resource and stores it as Result.Data.
+type CaptureBaselineCheckConfig struct {
+  ID          CheckID
+  Name        string
+  Description string
+  DependsOn   []CheckID // must include the check that discovers the resources
+  Capture     func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)
+  Timeout     time.Duration
+  Concurrency int
+}
+
+func NewCaptureBaselineCheck(cfg CaptureBaselineCheckConfig) Check
+func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check // no DependsOn: set it on the returned Check
 ```
 
 ### GlobalBaselineSource / GlobalCapture
@@ -220,6 +233,17 @@ type GlobalBaselineCheckConfig struct {
 }
 
 func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check
+
+type CaptureGlobalBaselineCheckConfig struct {
+  ID          CheckID
+  Name        string
+  Description string
+  DependsOn   []CheckID
+  Capture     GlobalCapture
+  Timeout     time.Duration
+}
+
+func NewCaptureGlobalBaselineCheck(cfg CaptureGlobalBaselineCheckConfig) Check
 func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check
 ```
 
@@ -278,7 +302,7 @@ func ApplyCredential(req *http.Request, value string, loc CredentialLocation) (*
 `NewCredentialRequest` builds a `GET` against `target` and applies `value` at `loc`. `ApplyCredential` places `loc.Prefix+value` on a request you already built and returns a copy; `req` is never modified and keeps its method, URL, headers, cookies and body:
 
 - `header` / `query`: the named header or query parameter is set, replacing any existing value;
-- `cookie`: a cookie is added (as `WithAuthCookie`);
+- `cookie`: the cookie is set as `WithAuthCookie` does, replacing any existing cookie of that name and keeping the others;
 - `body`: as `WithFormCredential` — the method becomes `POST` and the body is replaced by a urlencoded form holding only `loc.Name`.
 
 ### Probe
@@ -301,7 +325,7 @@ func WithRateLimiter(l *rate.Limiter) Option  // waits before every attempt, ret
 var ErrMaxRetriesExceeded error
 ```
 
-Non-idempotent requests are retried on `429` only, unless `WithRetryNonIdempotent` is set.
+Non-idempotent requests are retried on `429` only, unless `WithRetryNonIdempotent` is set. `RoundTrip` does not modify the request it is given (it reads the body through `GetBody` when set), and sends an empty body with a known zero length rather than chunked. `X-RateLimit-Reset` is read as an epoch timestamp, or as seconds until reset when below 10⁹.
 
 ### Do / DoResponse
 
@@ -345,7 +369,7 @@ func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.Re
 
 With no comparators, only a change in status code counts as a deviation (`CompareStatusCode`). Otherwise every comparator is applied and the response deviates if any of them reports an observation, so comparators compose. Returns the captured `Snapshot` and whether it deviated. Building a `Result`/`Observation` from that is left to the caller.
 
-The baseline is read with `GetData[Snapshot]`; if none is stored, the zero `Snapshot` is compared.
+The baseline is read with `GetData[Snapshot]`. If none is stored it returns the captured snapshot, `false` and `ErrNoBaseline` (wrapped with the check ID), rather than comparing against an empty `Snapshot`.
 
 ### Check
 
@@ -406,7 +430,7 @@ type ResourceCheckFunc func(ctx context.Context, target Target, resource Resourc
 - `Timeout`: Max execution time of each invocation of the run function — per resource for a per-resource check, and for the whole variant set (not each variant) when `Variants` is set. Falls back to the engine default (30s, see [`WithDefaultTimeout`](#withdefaulttimeout)) when `0`
 - `Concurrency`: Max resources run at once for this check; falls back to `WithMaxResourceConcurrency` when `0`
 
-**Per-resource results.** A `ScopePerResource` check is recorded once per resource. Read it back with `store.GetForResource(id, resourceID)`. `store.Get(id)`, and therefore `IfCheckPassed`, `IfCheckObserved`, `IfCheckSkipped`, `GetData` and `BaselineFromGlobalCheck`, do not see it — depend on a per-resource check's output through `GetForResource` (as `BaselineFromCheck` does), not through a condition.
+**Per-resource results.** A `ScopePerResource` check is recorded once per resource, readable with `store.GetForResource(id, resourceID)`. `store.Get(id)` returns a rolled-up check-level `Result` for it, available once every resource has run: its `Observations` are all the resources' observations, its `Err` is the first resource error, and it is `Skipped` only if every resource was skipped. `Data` and `Resources` are not aggregated; read them per resource. This is what lets `IfCheckPassed`, `IfCheckObserved` and `IfCheckSkipped` work on a per-resource dependency. The aggregate is not counted in `ScanSummary`.
 
 **Concurrency.** A check holds one slot of `WithMaxConcurrency` for as long as it runs, including while a per-resource check fans out, so up to `WithMaxConcurrency × WithMaxResourceConcurrency` resource invocations can be in flight at once.
 
@@ -509,7 +533,7 @@ type Condition func(store ResultStore) bool
 - `Any(...Condition)` — at least one must be true
 - `Not(Condition)` — negate a condition
 
-All three `IfCheck*` constructors are false when no result is recorded for the check, which includes any `ScopePerResource` check (see [Check](#check)).
+All three `IfCheck*` constructors are false when no result is recorded for the check. For a `ScopePerResource` check they use its rolled-up result (see [Check](#check)): `IfCheckPassed` holds only if every resource passed, `IfCheckObserved` if any resource observed something, `IfCheckSkipped` if every resource was skipped.
 
 ### ResultStore
 
@@ -517,9 +541,9 @@ Read-only view of the results recorded so far. Skip decisions, conditions and ru
 
 ```go
 type ResultStore interface {
-  Get(id CheckID) (Result, bool)                                // a global check's result
+  Get(id CheckID) (Result, bool)                                // a check's result; the aggregate for a per-resource check
   GetForResource(id CheckID, resourceID string) (Result, bool)  // a per-resource check's result for one resource
-  Observations() []Observation                                  // every observation so far, unordered
+  Observations() []Observation                                  // every observation so far, unordered, each counted once
   Resources() []Resource                                        // every resource discovered so far
 }
 ```
@@ -532,7 +556,7 @@ func DataResult(data any) Result             // same without an ID; the engine s
 func Skip(id CheckID, reason string) Result  // a skipped Result
 
 func DataAs[T any](r Result) (T, bool)
-func GetData[T any](store ResultStore, id CheckID) (T, bool) // false for a missing result or a different type
+func GetData[T any](store ResultStore, id CheckID) (T, bool) // false for a missing result or a different type; a per-resource check's aggregate has no Data
 func ResourceDataAs[T any](resource Resource) (T, bool)
 ```
 
@@ -566,8 +590,8 @@ Summary of scan results, returned by `Run` / `RunScenario` and passed to `Report
 type ScanSummary struct {
   Target       Target
   TotalChecks  int // scheduled checks; a per-resource check counts once
-  Executed     int // executions that did not fail; a per-resource check counts once per resource
-  Skipped      int
+  Executed     int // executions that did not fail or skip; a per-resource check counts once per resource
+  Skipped      int // skip decisions, unmet conditions, and results that report Skipped (such as Skip(...))
   Failed       int // executions whose Result.Err is non-nil
   Observations []Observation
   Results      []Result // in completion order, not deterministic
@@ -624,12 +648,13 @@ Spans are keyed by check and resource, so use one reporter per concurrent scan; 
 
 ### ScanError
 
-Records a failed check — typically a recovered panic — and is stored in `Result.Err`.
+Records a failed check — typically a recovered panic — and is stored in `Result.Err`. For a recovered panic `Stack` holds the goroutine stack, and `CheckID` is set to the failing check (including for a panic inside one variant of a `Variants` check).
 
 ```go
 type ScanError struct {
   CheckID CheckID
   Cause   error
+  Stack   []byte
 }
 
 func (e *ScanError) Error() string
@@ -645,6 +670,9 @@ var (
   ErrUnknownDependency // dependency not registered (or removed by WithExclude)
   ErrNoChecks          // no check left to run
 )
+
+// Returned by ProbeAndCompareBaseline:
+var ErrNoBaseline error // nothing is stored under the baseline check's ID
 ```
 
 ### Engine
@@ -667,7 +695,7 @@ Create a new engine.
 func New(opts ...Option) *Engine
 ```
 
-Checks passed with `WithChecks` are registered immediately, but `New` cannot report a registration error such as a duplicate ID — use `Register` when you need to see one.
+Checks passed with `WithChecks` are registered immediately. `New` cannot return a registration error such as a duplicate ID, so `Run` returns it (and runs nothing) instead — use `Register` to see it right away.
 
 **Example:**
 ```go
@@ -686,7 +714,7 @@ func (e *Engine) Register(checks ...Check) error
 ```
 
 **Returns:**
-- `ErrDuplicateCheckID`, wrapped with the ID, if a check with the same ID is already registered or repeated in `checks`. Checks listed before the duplicate stay registered.
+- `ErrDuplicateCheckID`, wrapped with the ID, if a check with the same ID is already registered or repeated in `checks`. Registration is all or nothing: no check from `checks` is added when one is rejected.
 
 Unknown dependencies and cycles are not detected here; they are reported by `Run`.
 
@@ -709,7 +737,8 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 **Returns:**
 - `ScanSummary` with counts of executed, failed and skipped checks. It is returned alongside any error, and `Reporter.OnScanComplete` is always called.
 - `ErrNoChecks` if no check is left to run
-- `ErrDuplicateCheckID`, `ErrUnknownDependency` or `ErrCycleDetected` for an invalid graph — including `ErrUnknownDependency` if `WithOnly`/`WithExclude` drops a check another selected check depends on
+- `ErrDuplicateCheckID`, `ErrUnknownDependency` or `ErrCycleDetected` for an invalid graph — including `ErrUnknownDependency` if `WithOnly`/`WithExclude` drops a check another selected check depends on, and `ErrDuplicateCheckID` for a duplicate among the `WithChecks` checks passed to `New`
+- an error for a check with an unknown `Scope`, a missing run function, or a per-resource skip decision (`SkipResourceWhen`) on a `ScopeGlobal` check
 - the context's error if `ctx` is cancelled
 
 A failing or panicking check does not make `Run` return an error: it is counted in `ScanSummary.Failed` and its error is on its `Result`.

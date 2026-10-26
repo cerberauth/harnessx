@@ -172,7 +172,7 @@ func (p *Probe) Client() *http.Client {
 func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 
-	bodyBytes, err := snapshotBody(req)
+	bodyBytes, hasBody, err := snapshotBody(req)
 	if err != nil {
 		return nil, err
 	}
@@ -196,9 +196,8 @@ func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error) {
 		if clone.Header.Get("User-Agent") == "" {
 			clone.Header.Set("User-Agent", p.cfg.userAgent)
 		}
-		if bodyBytes != nil {
-			clone.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-			clone.ContentLength = int64(len(bodyBytes))
+		if hasBody {
+			setBody(clone, bodyBytes)
 		}
 
 		resp, err := p.transport.RoundTrip(clone)
@@ -252,19 +251,46 @@ func isIdempotent(req *http.Request) bool {
 	return req.Header.Get("Idempotency-Key") != ""
 }
 
-// snapshotBody reads req.Body into a byte slice so it can be replayed on each
-// retry attempt. The body is restored on req after reading.
-func snapshotBody(req *http.Request) ([]byte, error) {
+// snapshotBody reads the request body into a byte slice so it can be replayed
+// on each retry attempt, and reports whether the request has a body at all. It
+// leaves req untouched, as an http.RoundTripper must: it reads through
+// req.GetBody when set, otherwise it consumes req.Body, which RoundTrip would
+// have done anyway. req.Body is closed either way.
+func snapshotBody(req *http.Request) (data []byte, hasBody bool, err error) {
 	if req.Body == nil || req.Body == http.NoBody {
-		return nil, nil
+		return nil, false, nil
 	}
-	data, err := io.ReadAll(req.Body)
-	_ = req.Body.Close()
+	src := req.Body
+	if req.GetBody != nil {
+		fresh, gerr := req.GetBody()
+		if gerr != nil {
+			_ = req.Body.Close()
+			return nil, false, fmt.Errorf("probe: cloning request body: %w", gerr)
+		}
+		_ = req.Body.Close()
+		src = fresh
+	}
+	data, err = io.ReadAll(src)
+	_ = src.Close()
 	if err != nil {
-		return nil, fmt.Errorf("probe: reading request body: %w", err)
+		return nil, false, fmt.Errorf("probe: reading request body: %w", err)
+	}
+	return data, true, nil
+}
+
+// setBody gives req a replayable body holding data. An empty body is
+// http.NoBody with a known zero length, so net/http does not fall back to
+// chunked encoding for it.
+func setBody(req *http.Request, data []byte) {
+	if len(data) == 0 {
+		req.Body = http.NoBody
+		req.ContentLength = 0
+		req.GetBody = func() (io.ReadCloser, error) { return http.NoBody, nil }
+		return
 	}
 	req.Body = io.NopCloser(bytes.NewReader(data))
-	return data, nil
+	req.ContentLength = int64(len(data))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
 }
 
 // maxRetryWait caps every wait between retries, whether computed locally or
@@ -275,7 +301,7 @@ const maxRetryWait = 60 * time.Second
 // It parses response headers in priority order:
 //  1. Retry-After: <integer seconds>
 //  2. Retry-After: <HTTP-date>
-//  3. X-RateLimit-Reset: <unix timestamp>
+//  3. X-RateLimit-Reset: <unix timestamp>, or <seconds until reset> when small
 //  4. Exponential backoff with full jitter
 //
 // Server-supplied waits are capped at maxRetryWait so a hostile or buggy
@@ -300,6 +326,15 @@ func retryAfterDuration(resp *http.Response, base time.Duration, attempt int) ti
 
 	if h := resp.Header.Get("X-RateLimit-Reset"); h != "" {
 		if ts, err := strconv.ParseInt(h, 10, 64); err == nil {
+			// APIs send either an epoch timestamp or the seconds until reset;
+			// anything below this cutoff (year 2001 as an epoch) is a delta.
+			const epochCutoff = 1e9
+			if ts < epochCutoff {
+				if ts <= 0 {
+					return 0
+				}
+				return time.Duration(ts) * time.Second
+			}
 			if d := time.Until(time.Unix(ts, 0)); d > 0 {
 				return min(d, maxRetryWait)
 			}

@@ -308,13 +308,13 @@ func BaselineFromCheck(id CheckID) BaselineSource
 func CompareStatusCode(baseline, current Snapshot) []Observation // default comparator
 
 func NewBaselineCheck(cfg BaselineCheckConfig) Check
-func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check
+func NewCaptureBaselineCheck(cfg CaptureBaselineCheckConfig) Check
 
 // ScopeGlobal counterparts, for targets with no per-resource dimension.
 func StaticGlobalBaseline(b Baseline) GlobalBaselineSource
 func BaselineFromGlobalCheck(id CheckID) GlobalBaselineSource
 func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check
-func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check
+func NewCaptureGlobalBaselineCheck(cfg CaptureGlobalBaselineCheckConfig) Check
 
 // probe package: build a request, then apply named mutators (WithBearerToken,
 // WithBasicAuth, WithAPIKeyHeader, WithAPIKeyQuery, WithAuthCookie, WithFormCredential, ...).
@@ -322,10 +322,10 @@ func NewRequest(ctx context.Context, method, target string, body io.Reader, muta
 func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID) (Snapshot, bool, error)
 ```
 
-- The baseline comes from a **baseline probe** (`CaptureBaselineCheck` + `BaselineFromCheck`) captured at runtime, or is **defined manually** (`StaticBaseline`, or `BaselineFromResource` reading `Resource.Data` set at discovery time).
+- The baseline comes from a **baseline probe** (`NewCaptureBaselineCheck` + `BaselineFromCheck`) captured at runtime, or is **defined manually** (`StaticBaseline`, or `BaselineFromResource` reading `Resource.Data` set at discovery time).
 - `Compare` defaults to `CompareStatusCode` but can be overridden with any function to judge headers, body, or other data carried in `Snapshot.Data`.
 - A resource with no resolvable baseline is skipped rather than compared.
-- For `ScopeGlobal` checks (no per-resource dimension), use `NewGlobalBaselineCheck`/`CaptureGlobalBaselineCheck` — same API, minus the `Resource` param.
+- For `ScopeGlobal` checks (no per-resource dimension), use `NewGlobalBaselineCheck`/`NewCaptureGlobalBaselineCheck` — same API, minus the `Resource` param.
 - For a credential-placement probe (swap/omit a token, API key, session ID), `ProbeAndCompareBaseline` takes a `probe.RequestBuilder` and collapses request-build + send + compare into one call — no `Capture`/`Compare` wiring needed.
 
 See the [Baseline Comparison guide](/guides/baseline) for examples.

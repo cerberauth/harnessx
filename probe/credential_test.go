@@ -369,6 +369,32 @@ func TestApplyCredential_CookieKeepsExistingCookies(t *testing.T) {
 	assertBaseUntouched(t, base)
 }
 
+func TestApplyCredential_CookieReplacesExistingCookieOfSameName(t *testing.T) {
+	base := newApplyBase(t)
+	base.AddCookie(&http.Cookie{Name: applySession, Value: "old", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+
+	out, err := ApplyCredential(base, testCredentialValue, CredentialLocation{In: CredentialLocationCookie, Name: applySession})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var sessions []string
+	for _, c := range out.Cookies() {
+		if c.Name == applySession {
+			sessions = append(sessions, c.Value)
+		}
+	}
+	if len(sessions) != 1 || sessions[0] != testCredentialValue {
+		t.Errorf("session cookies = %v, want exactly [%s]", sessions, testCredentialValue)
+	}
+	if c, err := out.Cookie("pref"); err != nil || c.Value != "dark" {
+		t.Errorf("existing pref cookie = %v, %v; want dark", c, err)
+	}
+	if c, err := base.Cookie(applySession); err != nil || c.Value != "old" {
+		t.Errorf("base session cookie = %v, %v; want it left as old", c, err)
+	}
+}
+
 func TestApplyCredential_BodyReplacesBodyWithFormAndSwitchesToPost(t *testing.T) {
 	base := newApplyBase(t)
 	base.Method = http.MethodPut

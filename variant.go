@@ -3,6 +3,7 @@ package harnessx
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -58,7 +59,7 @@ func runVariantAttempt(ctx context.Context, variant string, fn func(context.Cont
 	defer func() {
 		attempt.Duration = time.Since(start)
 		if r := recover(); r != nil {
-			attempt.Err = &ScanError{Cause: fmt.Errorf("panic: %v", r)}
+			attempt.Err = &ScanError{Cause: fmt.Errorf("panic: %v", r), Stack: debug.Stack()}
 		}
 	}()
 

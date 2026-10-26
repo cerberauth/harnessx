@@ -135,7 +135,8 @@ func NewCredentialRequest(ctx context.Context, target string, value string, loc 
 // loc is first completed with CredentialLocation.WithDefaults and checked with
 // CredentialLocation.Validate. The credential then goes where loc.In says:
 //   - header: the header loc.Name is set, replacing any existing value;
-//   - cookie: a cookie loc.Name is added (WithAuthCookie);
+//   - cookie: a cookie loc.Name is set (WithAuthCookie), replacing any existing
+//     cookie of that name;
 //   - query: the query parameter loc.Name is set, replacing any existing value;
 //   - body: with the semantics of WithFormCredential — the method becomes POST
 //     and the body is replaced by a urlencoded form holding only loc.Name.
@@ -159,6 +160,7 @@ func ApplyCredential(req *http.Request, value string, loc CredentialLocation) (*
 	var mutator RequestMutator
 	switch loc.In {
 	case CredentialLocationCookie:
+		removeCookie(out, loc.Name)
 		mutator = WithAuthCookie(loc.Name, value)
 	case CredentialLocationQuery:
 		mutator = WithAPIKeyQuery(loc.Name, value)
@@ -171,6 +173,19 @@ func ApplyCredential(req *http.Request, value string, loc CredentialLocation) (*
 		return nil, err
 	}
 	return out, nil
+}
+
+// removeCookie drops every cookie called name from req's Cookie header, keeping
+// the others, so that adding one with the same name replaces it rather than
+// sending the name twice.
+func removeCookie(req *http.Request, name string) {
+	cookies := req.Cookies()
+	req.Header.Del("Cookie")
+	for _, c := range cookies {
+		if c.Name != name {
+			req.AddCookie(c)
+		}
+	}
 }
 
 // cloneBody gives dst, a Clone of src, its own body reader. Clone shares the

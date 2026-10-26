@@ -5,8 +5,9 @@ package harnessx
 // Result.Resources; per-resource checks that depend on them run once per
 // resource.
 //
-// Resource IDs are expected to be unique across a run. Metadata holds string
-// attributes and Data anything else a check wants to hand on (see
+// Resource IDs identify a resource across a run: when several checks emit the
+// same ID, the first one discovered is kept and the rest are dropped. Metadata
+// holds string attributes and Data anything else a check wants to hand on (see
 // ResourceDataAs).
 type Resource struct {
 	ID       string

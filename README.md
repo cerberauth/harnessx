@@ -511,17 +511,21 @@ type BaselineComparator func(baseline, current Snapshot) []Observation
 
 A baseline is obtained one of two ways:
 
-- **Baseline probe** — a dedicated check captures the expected response at scan time and stores it via `CaptureBaselineCheck`; downstream checks read it back with `BaselineFromCheck(id)`.
+- **Baseline probe** — a dedicated check captures the expected response at scan time and stores it via `NewCaptureBaselineCheck`; downstream checks read it back with `BaselineFromCheck(id)`.
 - **Manual** — a fixed value via `StaticBaseline(b)`, or a per-resource value attached to `Resource.Data` at discovery time and read back with `BaselineFromResource()`.
 
 `NewBaselineCheck` wires a `BaselineSource`, a `Capture` function, and an optional `Compare` (defaults to `CompareStatusCode`) into a normal `Check`:
 
 ```go
 // Baseline captured once, at runtime, per resource.
-probeCheck := harnessx.CaptureBaselineCheck("baseline-probe", "Baseline Probe",
-    func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+probeCheck := harnessx.NewCaptureBaselineCheck(harnessx.CaptureBaselineCheckConfig{
+    ID:        "baseline-probe",
+    Name:      "Baseline Probe",
+    DependsOn: []harnessx.CheckID{"discovery"}, // the check that discovers the resources
+    Capture: func(ctx context.Context, t harnessx.Target, r harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
         return captureUnauthenticated(ctx, r.URL) // your capture logic
-    })
+    },
+})
 
 // Compared against a later, potentially malicious, attempt.
 bypassCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
@@ -542,7 +546,7 @@ bypassCheck := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
 })
 ```
 
-For targets with no per-resource dimension (a single token, a single endpoint), use the `ScopeGlobal` counterparts — `NewGlobalBaselineCheck`, `CaptureGlobalBaselineCheck`, `StaticGlobalBaseline`, `BaselineFromGlobalCheck` — same shape, minus the `Resource` param.
+For targets with no per-resource dimension (a single token, a single endpoint), use the `ScopeGlobal` counterparts — `NewGlobalBaselineCheck`, `NewCaptureGlobalBaselineCheck`, `StaticGlobalBaseline`, `BaselineFromGlobalCheck` — same shape, minus the `Resource` param.
 
 For checks that probe by swapping/omitting a credential (token, API key, session ID), `harnessx.ProbeAndCompareBaseline` takes a `probe.RequestBuilder` and skips the `Capture`/`Compare` wiring entirely:
 
@@ -664,9 +668,9 @@ type BaselineCheckConfig struct {
 // NewBaselineCheck builds a ScopePerResource Check from cfg.
 func NewBaselineCheck(cfg BaselineCheckConfig) Check
 
-// CaptureBaselineCheck builds a ScopePerResource Check that captures a
+// NewCaptureBaselineCheck builds a ScopePerResource Check that captures a
 // Snapshot per resource and stores it as Result.Data — the "baseline probe".
-func CaptureBaselineCheck(id CheckID, name string, capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)) Check
+func NewCaptureBaselineCheck(cfg CaptureBaselineCheckConfig) Check
 
 // ScopeGlobal counterparts, for targets with no per-resource dimension.
 type GlobalBaselineSource func(ctx context.Context, target Target, store ResultStore) (Baseline, bool)
@@ -685,7 +689,7 @@ type GlobalBaselineCheckConfig struct {
 }
 
 func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check
-func CaptureGlobalBaselineCheck(id CheckID, name string, capture GlobalCapture) Check
+func NewCaptureGlobalBaselineCheck(cfg CaptureGlobalBaselineCheckConfig) Check
 
 // probe package: build a request from method+URL, then apply small
 // composable mutators to it.
