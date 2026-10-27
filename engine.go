@@ -23,7 +23,8 @@ type resultStore struct {
 	// of Observations so findings are not counted twice.
 	aggregates map[CheckID]Result
 	resources  []Resource
-	resourceID map[string]struct{}
+	resourceAt map[string]int // index in resources, by Resource.ID
+	merge      ResourceMergeFunc
 }
 
 type checkResourceKey struct {
@@ -31,12 +32,16 @@ type checkResourceKey struct {
 	resourceID string
 }
 
-func newResultStore() *resultStore {
+func newResultStore(merge ResourceMergeFunc) *resultStore {
+	if merge == nil {
+		merge = KeepFirstResource
+	}
 	return &resultStore{
 		results:    make(map[CheckID]Result),
 		perRes:     make(map[checkResourceKey]Result),
 		aggregates: make(map[CheckID]Result),
-		resourceID: make(map[string]struct{}),
+		resourceAt: make(map[string]int),
+		merge:      merge,
 	}
 }
 
@@ -58,19 +63,20 @@ func (s *resultStore) setAggregate(id CheckID, r Result) {
 	s.mu.Unlock()
 }
 
-// mergeResources adds resources to the store, dropping any whose ID is already
-// known: the first resource discovered under an ID wins, so a resource that
-// two checks both emit is run against once.
+// mergeResources adds resources to the store. A resource whose ID is already
+// known is not added again, so a resource that two checks both emit is run
+// against once; the engine's ResourceMergeFunc decides which version is kept.
 func (s *resultStore) mergeResources(resources []Resource) {
 	if len(resources) == 0 {
 		return
 	}
 	s.mu.Lock()
 	for _, res := range resources {
-		if _, dup := s.resourceID[res.ID]; dup {
+		if i, dup := s.resourceAt[res.ID]; dup {
+			s.resources[i] = s.merge(s.resources[i], res)
 			continue
 		}
-		s.resourceID[res.ID] = struct{}{}
+		s.resourceAt[res.ID] = len(s.resources)
 		s.resources = append(s.resources, res)
 	}
 	s.mu.Unlock()
@@ -240,7 +246,7 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 	if preErr == nil {
 		preErr = cfg.unknownOnly(checks)
 	}
-	return e.run(ctx, target, cfg.filter(checks), nil, preErr)
+	return e.run(ctx, target, cfg.filter(checks), cfg.reporters, preErr)
 }
 
 // RunScenario executes the checks in scenario against target using the
@@ -254,7 +260,8 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 //
 // If scenario.Reporters is non-empty it is used instead of the engine's
 // configured reporters (see [WithReporters]), so a shared engine can give
-// each caller its own reporters.
+// each caller its own reporters. [WithRunReporters] in opts takes precedence
+// over both.
 //
 // Reporter.OnScanComplete is always called before returning, even if
 // scenario.Checks is empty.
@@ -262,7 +269,11 @@ func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenar
 	checks := make([]Check, len(scenario.Checks))
 	copy(checks, scenario.Checks)
 	cfg := newRunConfig(opts)
-	return e.run(ctx, target, cfg.filter(checks), scenario.Reporters, cfg.unknownOnly(checks))
+	reporters := scenario.Reporters
+	if len(cfg.reporters) > 0 {
+		reporters = cfg.reporters
+	}
+	return e.run(ctx, target, cfg.filter(checks), reporters, cfg.unknownOnly(checks))
 }
 
 // scan is the state of one Run or RunScenario call.
@@ -302,7 +313,7 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 		cfg:       e.cfg,
 		target:    target,
 		reporters: e.cfg.reporters,
-		store:     newResultStore(),
+		store:     newResultStore(e.cfg.resourceMerge),
 		levelSem:  semaphore.New(e.cfg.maxConcurrency),
 		summary:   ScanSummary{Target: target},
 	}

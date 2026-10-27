@@ -204,6 +204,28 @@ engine := harnessx.New(
 )
 ```
 
+## Built-in text and JSON reporters
+
+For CLI tools, examples and piping a scan into other programs, the `reporters` sub-package has two ready-made reporters that write to any `io.Writer`:
+
+```go
+// One line per finished check, its observations indented beneath it, then a summary.
+engine := harnessx.New(harnessx.WithReporters(reporters.NewTextReporter(os.Stdout)))
+
+// JSON Lines: a scan_start, one check_complete per check (per resource), and a scan_complete.
+engine := harnessx.New(harnessx.WithReporters(reporters.NewJSONReporter(os.Stdout)))
+```
+
+Both are safe for concurrent use and never interrupt a scan on a write error; `Err()` returns the first one.
+
+## Per-call reporters
+
+`WithRunReporters` gives a single `Run` or `RunScenario` call its own reporters, in place of the engine's (and of `Scenario.Reporters`), so a shared engine does not need a `Scenario` just to change them:
+
+```go
+summary, err := engine.Run(ctx, target, harnessx.WithRunReporters(reporters.NewTextReporter(os.Stdout)))
+```
+
 ## OpenTelemetry reporter
 
 The `reporters` sub-package provides `OTelReporter`, which emits spans and metrics via OpenTelemetry.
@@ -225,6 +247,8 @@ engine := harnessx.New(
   harnessx.WithReporters(otelReporter),
 )
 ```
+
+Spans form a tree. A `{prefix}.scan` span, started when the scan starts and carrying `target.url` / `target.host`, is the parent of one `{prefix}.check` span per check execution (per resource, for a per-resource check). A skipped check has no span of its own; it is recorded as a `check.skipped` event on the scan span, with its `check.id`, `resource.id` and `check.skip_reason`.
 
 Metrics emitted (prefix defaults to `harnessx`):
 

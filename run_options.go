@@ -11,6 +11,7 @@ type runConfig struct {
 	only       map[CheckID]struct{}
 	exclude    map[CheckID]struct{}
 	predicates []func(Check) bool
+	reporters  []Reporter
 }
 
 // RunOption customizes which registered checks execute for a single Engine.Run call.
@@ -91,6 +92,16 @@ func WithCAPECID(ids ...string) RunOption {
 // given values (case-insensitive, e.g. "API2:2023" or "A01:2021").
 func WithOWASP(ids ...string) RunOption {
 	return WithFilter(func(c Check) bool { return inFold(c.OWASP, ids) })
+}
+
+// WithRunReporters sets the reporters that receive the callbacks of this call,
+// instead of the engine's (see WithReporters) — and, for RunScenario, instead of
+// Scenario.Reporters. A shared engine can thus give every caller its own
+// reporters without building a Scenario. Calling it again adds to the list.
+func WithRunReporters(reporters ...Reporter) RunOption {
+	return func(cfg *runConfig) {
+		cfg.reporters = append(cfg.reporters, reporters...)
+	}
 }
 
 func inFold(v string, set []string) bool {

@@ -787,6 +787,9 @@ func checkdef.WithVariantMode(mode harnessx.VariantMode) checkdef.Option
 | `WithDefaultTimeout(d)` | `30s` | Per-check timeout when `Check.Timeout` is zero |
 | `WithReporters(reporters...)` | `NoopReporter` | Real-time event callbacks (multiple reporters supported) |
 | `WithChecks(checks...)` | — | Register checks at construction time |
+| `WithResourceMerge(fn)` | `KeepFirstResource` | Which version to keep when two checks discover the same resource ID (`KeepFirstResource`, `KeepLastResource`, or your own) |
+
+Per call, `WithRunReporters(reporters...)` gives one `Run` or `RunScenario` its own reporters, replacing the engine's (and `Scenario.Reporters`). The `reporters` package ships `TextReporter` (human-readable lines), `JSONReporter` (JSON Lines) and `OTelReporter` (OpenTelemetry spans and metrics).
 
 ### Errors
 
