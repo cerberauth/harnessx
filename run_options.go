@@ -190,7 +190,7 @@ func (cfg runConfig) filter(checks []Check) []Check {
 	}
 
 	// Pull in the transitive dependencies of every selected check, even
-	// when they don't match only/predicates — otherwise newGraph fails
+	// when they don't match only/predicates — otherwise levels fails
 	// with ErrUnknownDependency. WithExclude still wins: an explicitly
 	// excluded ID is never re-added.
 	queue := make([]CheckID, 0, len(selected))

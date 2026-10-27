@@ -1,6 +1,7 @@
 package harnessx
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"runtime/debug"
@@ -28,6 +29,8 @@ import (
 //   - Result.Err is the first non-nil attempt error in variants order, not
 //     completion order, so it is deterministic in parallel mode too. An
 //     attempt's error is fn's returned error, or else the Err on its Result.
+//   - Result.Skipped is set only when every variant was skipped, with the
+//     SkipReason of the first one.
 //   - A panic in fn is recovered and recorded as that attempt's Err, a
 //     *ScanError, leaving the other variants unaffected.
 //
@@ -102,13 +105,9 @@ func runVariantAttempt(ctx context.Context, variant string, timeout time.Duratio
 	}()
 
 	result, err := fn(ctx, variant)
-	for i := range result.Observations {
-		if result.Observations[i].Variant == "" {
-			result.Observations[i].Variant = variant
-		}
-	}
-	attempt.Observations = result.Observations
+	attempt.Observations = fillObservations(result.Observations, "", "", variant)
 	attempt.Resources = result.Resources
+	attempt.Skipped, attempt.SkipReason = result.Skipped, result.SkipReason
 	attempt.Data = result.Data
 	if err != nil {
 		attempt.Err = err
@@ -120,12 +119,20 @@ func runVariantAttempt(ctx context.Context, variant string, timeout time.Duratio
 
 func aggregateAttempts(attempts []Attempt) Result {
 	result := Result{Attempts: attempts}
+	skipped := 0
 	for _, a := range attempts {
 		result.Observations = append(result.Observations, a.Observations...)
 		result.Resources = append(result.Resources, a.Resources...)
 		if result.Err == nil && a.Err != nil {
 			result.Err = a.Err
 		}
+		if a.Skipped {
+			skipped++
+		}
+	}
+	if len(attempts) > 0 && skipped == len(attempts) {
+		result.Skipped = true
+		result.SkipReason = cmp.Or(attempts[0].SkipReason, "all variants skipped")
 	}
 	return result
 }

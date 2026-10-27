@@ -309,18 +309,10 @@ const maxRetryWait = 60 * time.Second
 func retryAfterDuration(resp *http.Response, base time.Duration, attempt int) time.Duration {
 	if h := resp.Header.Get("Retry-After"); h != "" {
 		if secs, err := strconv.ParseInt(h, 10, 64); err == nil && secs > 0 {
-			if secs >= int64(maxRetryWait/time.Second) {
-				return maxRetryWait
-			}
-			return time.Duration(secs) * time.Second
+			return time.Duration(min(secs, int64(maxRetryWait/time.Second))) * time.Second
 		}
-		for _, layout := range []string{http.TimeFormat, time.RFC850, time.ANSIC} {
-			if t, err := time.Parse(layout, h); err == nil {
-				if d := time.Until(t); d > 0 {
-					return min(d, maxRetryWait)
-				}
-				return 0
-			}
+		if t, err := http.ParseTime(h); err == nil {
+			return min(max(time.Until(t), 0), maxRetryWait)
 		}
 	}
 
@@ -330,15 +322,9 @@ func retryAfterDuration(resp *http.Response, base time.Duration, attempt int) ti
 			// anything below this cutoff (year 2001 as an epoch) is a delta.
 			const epochCutoff = 1e9
 			if ts < epochCutoff {
-				if ts <= 0 {
-					return 0
-				}
-				return time.Duration(ts) * time.Second
+				return time.Duration(min(max(ts, 0), int64(maxRetryWait/time.Second))) * time.Second
 			}
-			if d := time.Until(time.Unix(ts, 0)); d > 0 {
-				return min(d, maxRetryWait)
-			}
-			return 0
+			return min(max(time.Until(time.Unix(ts, 0)), 0), maxRetryWait)
 		}
 	}
 

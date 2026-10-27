@@ -22,7 +22,7 @@ type Target struct {
 
 ### Resource
 
-Discovered by checks (via `Result.Resources`) and consumed by per-resource checks that depend on them. Resources are identified by `ID` across a run: when several checks emit the same `ID`, the first one discovered is kept and the others are dropped.
+Discovered by checks (via `Result.Resources`) and consumed by per-resource checks that depend on them. Resources are identified by `ID` across a run: when several checks emit the same `ID`, per-resource checks still run once for it, against the version kept by the engine's `ResourceMergeFunc` (the first one discovered, by default; see `WithResourceMerge`).
 
 ```go
 type Resource struct {
@@ -57,7 +57,7 @@ const (
 
 ### Observation
 
-An issue or noteworthy outcome found by a check. The engine does not fill in `CheckID` or `ResourceID` for you; `Variant` is set automatically, if left blank, for checks that use `Variants`.
+An issue or noteworthy outcome found by a check. A check need not set `CheckID`, `ResourceID` or `Variant`: the engine fills each one left blank with the check, the resource (for a per-resource check) and the variant (for a check with `Variants`) that produced it, so `ScanSummary.Observations` always says where each finding came from.
 
 ```go
 type Observation struct {
@@ -117,6 +117,8 @@ type Attempt struct {
   Variant      string
   Observations []Observation
   Resources    []Resource
+  Skipped      bool
+  SkipReason   string
   Duration     time.Duration
   Data         any
   Err          error
@@ -603,6 +605,7 @@ func RunVariants(ctx context.Context, variants []string, mode VariantMode, fn fu
 - `Attempts` holds one `Attempt` per variant, in the order of `variants`.
 - `Observations` and `Resources` are the attempts' slices concatenated in that order; an observation with an empty `Variant` gets its variant's name.
 - `Err` is the first non-nil attempt error in `variants` order (not completion order). A failing variant does not stop the others.
+- `Skipped` is set only when every variant returned a skipped `Result`, with the first one's `SkipReason`; otherwise the check counts as executed.
 - A panic in `fn` is recovered onto that attempt's `Err` as a `*ScanError`.
 - If `ctx` is cancelled, variants that have not started do not run; each is recorded as an attempt whose `Err` is `ctx.Err()`.
 - `Result.Data` is not set; each attempt's `Data` stays on its `Attempt`.
@@ -936,7 +939,7 @@ Checks in the same dependency level run concurrently, so which of their versions
 
 ### WithChecks
 
-Register checks when the engine is created. A registration error is not reported; use `Register` to see one.
+Register checks when the engine is created. `New` cannot return a registration error such as a duplicate ID, so `Run` returns it instead and runs nothing; use `Register` to see it right away.
 
 ```go
 func WithChecks(checks ...Check) Option

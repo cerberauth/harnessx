@@ -767,6 +767,14 @@ func TestRetryAfterDuration_XRateLimitResetPast(t *testing.T) {
 	}
 }
 
+func TestRetryAfterDuration_XRateLimitResetDeltaCapped(t *testing.T) {
+	resp := &http.Response{Header: make(http.Header)}
+	resp.Header.Set("X-RateLimit-Reset", "86400")
+	if d := retryAfterDuration(resp, 100*time.Millisecond, 0); d != maxRetryWait {
+		t.Errorf("d = %v, want %v (a one-day delta capped)", d, maxRetryWait)
+	}
+}
+
 func TestRetryAfterDuration_Fallback(t *testing.T) {
 	resp := &http.Response{Header: make(http.Header)}
 	d := retryAfterDuration(resp, 100*time.Millisecond, 0)

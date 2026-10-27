@@ -6,7 +6,8 @@ package harnessx
 // resource.
 //
 // Resource IDs identify a resource across a run: when several checks emit the
-// same ID, the first one discovered is kept and the rest are dropped. Metadata
+// same ID, per-resource checks still run once for it, against the version the
+// engine's ResourceMergeFunc keeps (the first one, by default). Metadata
 // holds string attributes and Data anything else a check wants to hand on (see
 // ResourceDataAs).
 type Resource struct {

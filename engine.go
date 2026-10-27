@@ -1,6 +1,7 @@
 package harnessx
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -132,16 +133,7 @@ func (s *storeSnapshot) Observations() []Observation {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	keys := make([]checkResourceKey, 0, len(s.perRes))
-	for k := range s.perRes {
-		keys = append(keys, k)
-	}
-	slices.SortFunc(keys, func(a, b checkResourceKey) int {
-		if c := strings.Compare(string(a.checkID), string(b.checkID)); c != 0 {
-			return c
-		}
-		return strings.Compare(a.resourceID, b.resourceID)
-	})
+	keys := sortedKeys(s.perRes)
 
 	var out []Observation
 	for _, id := range ids {
@@ -155,6 +147,21 @@ func (s *storeSnapshot) Observations() []Observation {
 
 func (s *storeSnapshot) Resources() []Resource {
 	return s.resources
+}
+
+// sortedKeys returns the keys of perRes ordered by check ID, then resource ID.
+func sortedKeys(perRes map[checkResourceKey]Result) []checkResourceKey {
+	keys := make([]checkResourceKey, 0, len(perRes))
+	for k := range perRes {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b checkResourceKey) int {
+		return cmp.Or(
+			strings.Compare(string(a.checkID), string(b.checkID)),
+			strings.Compare(a.resourceID, b.resourceID),
+		)
+	})
+	return keys
 }
 
 // Engine is safe for concurrent Run/RunScenario calls, including a
@@ -202,18 +209,8 @@ func (e *Engine) Register(checks ...Check) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	seen := make(map[CheckID]struct{}, len(e.checks)+len(checks))
-	for _, c := range e.checks {
-		seen[c.ID] = struct{}{}
-	}
-	for _, c := range checks {
-		if _, dup := seen[c.ID]; dup {
-			return fmt.Errorf("%w: %q", ErrDuplicateCheckID, c.ID)
-		}
-		seen[c.ID] = struct{}{}
-		if err := c.validate(); err != nil {
-			return err
-		}
+	if err := validateChecks(slices.Concat(e.checks, checks)); err != nil {
+		return err
 	}
 	e.checks = append(e.checks, checks...)
 	return nil
@@ -518,7 +515,8 @@ func (s *scan) sortSummary() {
 }
 
 // execute runs chk once, for res or, when res is nil, for the whole target. It
-// applies the check's timeout (or the engine default) and recovers panics.
+// applies the check's timeout (or the engine default), recovers panics, and
+// fills in the CheckID and ResourceID of the result and of its observations.
 func (s *scan) execute(ctx context.Context, chk Check, res *Resource, snapshot ResultStore) Result {
 	timeout := chk.Timeout
 	if timeout == 0 {
@@ -529,7 +527,29 @@ func (s *scan) execute(ctx context.Context, chk Check, res *Resource, snapshot R
 	if res != nil {
 		result.ResourceID = res.ID
 	}
+	result.Observations = fillObservations(result.Observations, result.CheckID, result.ResourceID, "")
+	for i := range result.Attempts {
+		result.Attempts[i].Observations = fillObservations(result.Attempts[i].Observations, result.CheckID, result.ResourceID, "")
+	}
 	return result
+}
+
+// fillObservations returns a copy of obs in which each empty CheckID,
+// ResourceID and Variant is set to the given one. It copies so that a slice a
+// check returns more than once, such as a package-level value, is never written
+// to, possibly from several goroutines.
+func fillObservations(obs []Observation, id CheckID, resourceID, variant string) []Observation {
+	if len(obs) == 0 {
+		return obs
+	}
+	out := slices.Clone(obs)
+	for i := range out {
+		o := &out[i]
+		o.CheckID = cmp.Or(o.CheckID, id)
+		o.ResourceID = cmp.Or(o.ResourceID, resourceID)
+		o.Variant = cmp.Or(o.Variant, variant)
+	}
+	return out
 }
 
 // record reports a finished result to the reporters and adds it to the summary.
@@ -548,7 +568,7 @@ func (s *scan) record(result Result) {
 	default:
 		s.summary.Executed++
 	}
-	s.summary.Observations = append(s.summary.Observations, result.Observations...)
+	// Observations are collected from the sorted Results by sortSummary.
 	s.summary.Results = append(s.summary.Results, result)
 }
 

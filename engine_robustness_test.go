@@ -450,6 +450,71 @@ func TestEngine_ObservationsAreOrderedAcrossPerResourceChecks(t *testing.T) {
 	}
 }
 
+func TestEngine_VariantCheckSkippedOnlyWhenEveryVariantSkips(t *testing.T) {
+	const reason = "variant does not apply"
+	variantCheck := func(id CheckID, skip func(variant string) bool) Check {
+		return Check{ID: id, Variants: []string{"a", "b"},
+			RunVariant: func(_ context.Context, _ Target, variant string, _ ResultStore) (Result, error) {
+				if skip(variant) {
+					return Result{Skipped: true, SkipReason: reason}, nil
+				}
+				return Result{}, nil
+			}}
+	}
+	summary, err := runEngine(t,
+		variantCheck("all", func(string) bool { return true }),
+		variantCheck("some", func(v string) bool { return v == "a" }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Skipped != 1 || summary.Executed != 1 {
+		t.Errorf("skipped=%d executed=%d, want 1 and 1", summary.Skipped, summary.Executed)
+	}
+	if r := resultFor(t, summary, "all"); r.Status() != StatusSkipped || r.SkipReason != reason {
+		t.Errorf("all-skipped check: status %s, reason %q; want skipped, %q", r.Status(), r.SkipReason, reason)
+	}
+	if r := resultFor(t, summary, "some"); r.Status() != StatusPassed || !r.Attempts[0].Skipped {
+		t.Errorf("partly skipped check: status %s, attempts %+v; want passed with attempt a skipped", r.Status(), r.Attempts)
+	}
+}
+
+func TestEngine_FillsObservationProvenanceWithoutMutatingTheCheck(t *testing.T) {
+	shared := []Observation{{Title: "finding"}}
+	summary, err := runEngine(t,
+		discover(idDiscover, Resource{ID: "r1"}, Resource{ID: "r2"}),
+		resourceCheck("per-res", []CheckID{idDiscover}, func(context.Context, Target, Resource, ResultStore) (Result, error) {
+			return Result{Observations: shared}, nil
+		}),
+		globalCheck("global", nil, func(context.Context, Target, ResultStore) (Result, error) {
+			return Result{Observations: []Observation{{Title: "own", CheckID: "explicit"}}}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(summary.Observations))
+	for _, o := range summary.Observations {
+		got = append(got, string(o.CheckID)+"/"+o.ResourceID)
+	}
+	want := []string{"explicit/", "per-res/r1", "per-res/r2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("observation provenance = %v, want %v", got, want)
+	}
+	if shared[0].CheckID != "" || shared[0].ResourceID != "" {
+		t.Errorf("the check's own slice was modified: %+v", shared[0])
+	}
+}
+
+func TestCheck_ValidateExplainsVariantRunWithoutVariants(t *testing.T) {
+	err := New().Register(Check{ID: "v", RunVariant: func(context.Context, Target, string, ResultStore) (Result, error) {
+		return Result{}, nil
+	}})
+	if err == nil || !strings.Contains(err.Error(), "only used when Variants is non-empty") {
+		t.Errorf("error = %v, want it to explain that RunVariant needs Variants", err)
+	}
+}
+
 func TestEngine_RunScenarioRejectsDuplicateIDs(t *testing.T) {
 	_, err := New().RunScenario(context.Background(), Target{}, Scenario{Checks: []Check{
 		globalCheck("dup", nil, stubRun), globalCheck("dup", nil, stubRun),

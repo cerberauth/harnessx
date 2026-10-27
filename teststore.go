@@ -44,7 +44,7 @@ func (s *StaticResultStore) Get(id CheckID) (Result, bool) {
 		return r, true
 	}
 	var perResource []Result
-	for _, k := range s.sortedKeys() {
+	for _, k := range sortedKeys(s.perRes) {
 		if k.checkID == id {
 			perResource = append(perResource, s.perRes[k])
 		}
@@ -83,7 +83,7 @@ func (s *StaticResultStore) Observations() []Observation {
 	for _, id := range ids {
 		out = append(out, s.results[id].Observations...)
 	}
-	for _, k := range s.sortedKeys() {
+	for _, k := range sortedKeys(s.perRes) {
 		out = append(out, s.perRes[k].Observations...)
 	}
 	return out
@@ -91,26 +91,3 @@ func (s *StaticResultStore) Observations() []Observation {
 
 // Resources returns the resources seeded with WithResources.
 func (s *StaticResultStore) Resources() []Resource { return s.resources }
-
-func (s *StaticResultStore) sortedKeys() []checkResourceKey {
-	keys := make([]checkResourceKey, 0, len(s.perRes))
-	for k := range s.perRes {
-		keys = append(keys, k)
-	}
-	slices.SortFunc(keys, func(a, b checkResourceKey) int {
-		if a.checkID != b.checkID {
-			if a.checkID < b.checkID {
-				return -1
-			}
-			return 1
-		}
-		switch {
-		case a.resourceID < b.resourceID:
-			return -1
-		case a.resourceID > b.resourceID:
-			return 1
-		}
-		return 0
-	})
-	return keys
-}

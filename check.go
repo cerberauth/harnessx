@@ -74,9 +74,10 @@ const (
 	ScopePerResource
 )
 
-// Observation is an issue or noteworthy outcome reported by a check. The engine
-// does not fill in CheckID or ResourceID; for a check with Variants, Variant is
-// set to the variant that produced the observation when left empty.
+// Observation is an issue or noteworthy outcome reported by a check. A check
+// need not set CheckID, ResourceID or Variant: the engine fills each one left
+// empty with the check, the resource (for a ScopePerResource check) and the
+// variant (for a check with Variants) that produced the observation.
 type Observation struct {
 	CheckID     CheckID
 	ResourceID  string
@@ -143,6 +144,8 @@ type Attempt struct {
 	Variant      string
 	Observations []Observation
 	Resources    []Resource
+	Skipped      bool
+	SkipReason   string
 	Duration     time.Duration
 	Data         any
 	Err          error
@@ -166,9 +169,8 @@ type ResultStore interface {
 	// GetForResource returns the result of a ScopePerResource check for one
 	// resource, and whether one exists.
 	GetForResource(id CheckID, resourceID string) (Result, bool)
-	// Observations returns every observation recorded so far, in no
-	// particular order. Each is returned once, whether it comes from a global
-	// or a per-resource result.
+	// Observations returns every observation recorded so far. Each is
+	// returned once, whether it comes from a global or a per-resource result.
 	Observations() []Observation
 	// Resources returns every resource discovered so far.
 	Resources() []Resource
@@ -200,8 +202,8 @@ type VariantMode int
 const (
 	// VariantsSequential runs the variants one at a time, in order (the default).
 	VariantsSequential VariantMode = iota
-	// VariantsParallel runs all variants concurrently, without any limit on
-	// their number.
+	// VariantsParallel runs the variants concurrently, at most
+	// Check.VariantConcurrency at a time when it is positive.
 	VariantsParallel
 )
 
@@ -211,9 +213,9 @@ const (
 //
 // Timeout bounds each invocation of the run function (each resource, for a
 // per-resource check) and, for a check with Variants, the whole variant set;
-// set VariantTimeout to bound each variant too. It defaults to the engine's default timeout (see
-// WithDefaultTimeout). Concurrency overrides the engine's per-resource
-// concurrency for this check.
+// set VariantTimeout to bound each variant too. It defaults to the engine's
+// default timeout (see WithDefaultTimeout). Concurrency overrides the engine's
+// per-resource concurrency for this check.
 //
 // A check holds a slot of the engine's level-wide concurrency limit
 // (WithMaxConcurrency) for as long as it runs, including while a per-resource
@@ -305,6 +307,9 @@ func (c Check) validate() error {
 		if c.RunResource != nil {
 			return nil
 		}
+	}
+	if len(c.Variants) == 0 && (c.RunVariant != nil || c.RunResourceVariant != nil) {
+		return fmt.Errorf("harnessx: check %q has %s but no %s set; RunVariant and RunResourceVariant are only used when Variants is non-empty", c.ID, field, run)
 	}
 	return fmt.Errorf("harnessx: check %q has %s but no %s set", c.ID, field, run)
 }
