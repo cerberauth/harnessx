@@ -210,8 +210,8 @@ const (
 // when Variants is non-empty, RunVariant / RunResourceVariant instead.
 //
 // Timeout bounds each invocation of the run function (each resource, for a
-// per-resource check) and, for a check with Variants, the whole variant set
-// rather than each variant. It defaults to the engine's default timeout (see
+// per-resource check) and, for a check with Variants, the whole variant set;
+// set VariantTimeout to bound each variant too. It defaults to the engine's default timeout (see
 // WithDefaultTimeout). Concurrency overrides the engine's per-resource
 // concurrency for this check.
 //
@@ -247,6 +247,12 @@ type Check struct {
 	VariantMode        VariantMode
 	RunVariant         VariantCheckFunc
 	RunResourceVariant VariantResourceCheckFunc
+
+	// VariantTimeout, when positive, bounds each variant on its own; Timeout
+	// still bounds the variant set as a whole. VariantConcurrency, when
+	// positive, caps how many variants run at once in VariantsParallel mode.
+	VariantTimeout     time.Duration
+	VariantConcurrency int
 
 	Timeout     time.Duration
 	Concurrency int
@@ -303,6 +309,10 @@ func (c Check) validate() error {
 	return fmt.Errorf("harnessx: check %q has %s but no %s set", c.ID, field, run)
 }
 
+func (c Check) variantLimits() variantLimits {
+	return variantLimits{concurrency: c.VariantConcurrency, timeout: c.VariantTimeout}
+}
+
 // invoke returns the function that executes c once: for res, or for the whole
 // target when res is nil. It picks between the plain and the variant run
 // functions, so callers need not branch on Variants.
@@ -312,7 +322,7 @@ func (c Check) invoke(target Target, store ResultStore, res *Resource) func(cont
 		return func(ctx context.Context) (Result, error) { return c.Run(ctx, target, store) }
 	case res == nil:
 		return func(ctx context.Context) (Result, error) {
-			return RunVariants(ctx, c.Variants, c.VariantMode, func(vctx context.Context, variant string) (Result, error) {
+			return runVariants(ctx, c.Variants, c.VariantMode, c.variantLimits(), func(vctx context.Context, variant string) (Result, error) {
 				return c.RunVariant(vctx, target, variant, store)
 			}), nil
 		}
@@ -320,7 +330,7 @@ func (c Check) invoke(target Target, store ResultStore, res *Resource) func(cont
 		return func(ctx context.Context) (Result, error) { return c.RunResource(ctx, target, *res, store) }
 	default:
 		return func(ctx context.Context) (Result, error) {
-			return RunVariants(ctx, c.Variants, c.VariantMode, func(vctx context.Context, variant string) (Result, error) {
+			return runVariants(ctx, c.Variants, c.VariantMode, c.variantLimits(), func(vctx context.Context, variant string) (Result, error) {
 				return c.RunResourceVariant(vctx, target, *res, variant, store)
 			}), nil
 		}

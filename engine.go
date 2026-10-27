@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,13 +118,31 @@ func (s *storeSnapshot) GetForResource(id CheckID, resourceID string) (Result, b
 	return r, ok
 }
 
+// Observations returns every observation, ordered by check ID and then resource
+// ID so that the result is stable between calls.
 func (s *storeSnapshot) Observations() []Observation {
-	var out []Observation
-	for _, r := range s.results {
-		out = append(out, r.Observations...)
+	ids := make([]CheckID, 0, len(s.results))
+	for id := range s.results {
+		ids = append(ids, id)
 	}
-	for _, r := range s.perRes {
-		out = append(out, r.Observations...)
+	slices.Sort(ids)
+	keys := make([]checkResourceKey, 0, len(s.perRes))
+	for k := range s.perRes {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b checkResourceKey) int {
+		if c := strings.Compare(string(a.checkID), string(b.checkID)); c != 0 {
+			return c
+		}
+		return strings.Compare(a.resourceID, b.resourceID)
+	})
+
+	var out []Observation
+	for _, id := range ids {
+		out = append(out, s.results[id].Observations...)
+	}
+	for _, k := range keys {
+		out = append(out, s.perRes[k].Observations...)
 	}
 	return out
 }
@@ -202,8 +223,10 @@ func (e *Engine) Register(checks ...Check) error {
 // Run returns ErrNoChecks if no check is left to run; ErrDuplicateCheckID,
 // ErrUnknownDependency or ErrCycleDetected (wrapped with the offending ID) for
 // an invalid graph, including a duplicate among the WithChecks checks passed to
-// New; an error for a check with an invalid Scope or a missing run function;
-// or the context's error if ctx is cancelled. A failing or panicking check does
+// New; ErrUnknownCheckID if WithOnly names an ID that matches no check; an error
+// for a check with an invalid Scope or a missing run function; or the context's
+// error if ctx is cancelled, in which case every check that did not get to run
+// is recorded as skipped ("scan cancelled"). A failing or panicking check does
 // not stop the scan: it is counted in ScanSummary.Failed and its error is on its
 // Result. Reporter.OnScanComplete is called in every case.
 func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (ScanSummary, error) {
@@ -212,7 +235,12 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 	copy(checks, e.checks)
 	e.mu.RUnlock()
 
-	return e.run(ctx, target, FilterChecks(checks, opts...), nil, e.initErr)
+	cfg := newRunConfig(opts)
+	preErr := e.initErr
+	if preErr == nil {
+		preErr = cfg.unknownOnly(checks)
+	}
+	return e.run(ctx, target, cfg.filter(checks), nil, preErr)
 }
 
 // RunScenario executes the checks in scenario against target using the
@@ -233,7 +261,8 @@ func (e *Engine) Run(ctx context.Context, target Target, opts ...RunOption) (Sca
 func (e *Engine) RunScenario(ctx context.Context, target Target, scenario Scenario, opts ...RunOption) (ScanSummary, error) {
 	checks := make([]Check, len(scenario.Checks))
 	copy(checks, scenario.Checks)
-	return e.run(ctx, target, FilterChecks(checks, opts...), scenario.Reporters, nil)
+	cfg := newRunConfig(opts)
+	return e.run(ctx, target, cfg.filter(checks), scenario.Reporters, cfg.unknownOnly(checks))
 }
 
 // scan is the state of one Run or RunScenario call.
@@ -243,6 +272,9 @@ type scan struct {
 	reporters []Reporter
 	store     *resultStore
 	levelSem  *semaphore.Semaphore
+
+	// order is the dependency level of each check, used to sort the summary.
+	order map[CheckID]int
 
 	mu      sync.Mutex // guards summary
 	summary ScanSummary
@@ -279,6 +311,7 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 	}
 
 	finalize := func(err error) (ScanSummary, error) {
+		s.sortSummary()
 		s.summary.Duration = time.Since(start)
 		s.summary.Err = err
 		for _, r := range s.reporters {
@@ -301,13 +334,26 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 		return finalize(err)
 	}
 
+	s.order = make(map[CheckID]int, len(checks))
+	for i, level := range ordered {
+		for _, c := range level {
+			s.order[c.ID] = i
+		}
+	}
+
 	s.summary.TotalChecks = len(checks)
 	for _, r := range s.reporters {
 		r.OnScanStart(target, s.summary.TotalChecks)
 	}
 
-	for _, level := range ordered {
+	for i, level := range ordered {
 		if ctx.Err() != nil {
+			// Record every check that did not get to run, so the counts add up.
+			for _, rest := range ordered[i:] {
+				for _, chk := range rest {
+					s.recordCancelled(chk)
+				}
+			}
 			return finalize(ctx.Err())
 		}
 		s.runLevel(ctx, level)
@@ -330,6 +376,7 @@ func (s *scan) runLevel(ctx context.Context, level []Check) {
 		go func() {
 			defer wg.Done()
 			if !s.levelSem.Acquire(ctx.Done()) {
+				s.recordCancelled(chk)
 				return
 			}
 			defer s.levelSem.Release()
@@ -367,7 +414,11 @@ func (s *scan) runGlobal(ctx context.Context, chk Check, snapshot ResultStore) {
 func (s *scan) runPerResource(ctx context.Context, chk Check, snapshot ResultStore) {
 	resources := snapshot.Resources()
 	if len(resources) == 0 {
-		skipped := Result{CheckID: chk.ID, Skipped: true, SkipReason: "no resources discovered"}
+		reason := "no resources discovered"
+		if len(chk.DependsOn) == 0 {
+			reason += ": a ScopePerResource check needs DependsOn on the check that discovers its resources"
+		}
+		skipped := Result{CheckID: chk.ID, Skipped: true, SkipReason: reason}
 		s.store.set(chk.ID, skipped)
 		s.record(skipped)
 		return
@@ -395,6 +446,10 @@ func (s *scan) runPerResource(ctx context.Context, chk Check, snapshot ResultSto
 		go func() {
 			defer wg.Done()
 			if !resSem.Acquire(ctx.Done()) {
+				result := Result{CheckID: chk.ID, ResourceID: res.ID, Skipped: true, SkipReason: reasonCancelled}
+				s.store.setForResource(chk.ID, res.ID, result)
+				results[i], ran[i] = result, true
+				s.record(result)
 				return
 			}
 			defer resSem.Release()
@@ -416,6 +471,39 @@ func (s *scan) runPerResource(ctx context.Context, chk Check, snapshot ResultSto
 	}
 	wg.Wait()
 	s.store.setAggregate(chk.ID, aggregateResources(chk.ID, results, ran, time.Since(fanStart)))
+}
+
+const reasonCancelled = "scan cancelled"
+
+// recordCancelled records chk as skipped because the scan was cancelled before
+// it could run, so that Executed + Skipped + Failed still accounts for it.
+func (s *scan) recordCancelled(chk Check) {
+	skipped := Result{CheckID: chk.ID, Skipped: true, SkipReason: reasonCancelled}
+	s.store.set(chk.ID, skipped)
+	s.record(skipped)
+}
+
+// sortSummary puts Results and Observations in a stable order — dependency
+// level, then check ID, then resource ID — instead of completion order.
+func (s *scan) sortSummary() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sort.SliceStable(s.summary.Results, func(i, j int) bool {
+		a, b := s.summary.Results[i], s.summary.Results[j]
+		if la, lb := s.order[a.CheckID], s.order[b.CheckID]; la != lb {
+			return la < lb
+		}
+		if a.CheckID != b.CheckID {
+			return a.CheckID < b.CheckID
+		}
+		return a.ResourceID < b.ResourceID
+	})
+
+	s.summary.Observations = nil
+	for _, r := range s.summary.Results {
+		s.summary.Observations = append(s.summary.Observations, r.Observations...)
+	}
 }
 
 // execute runs chk once, for res or, when res is nil, for the whole target. It

@@ -1,6 +1,10 @@
 package harnessx
 
-import "strings"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // runConfig holds per-run check selection, scoped to a single Engine.Run call.
 type runConfig struct {
@@ -13,7 +17,9 @@ type runConfig struct {
 type RunOption func(*runConfig)
 
 // WithOnly restricts a run to the given check IDs. Combine with WithExclude to
-// further narrow the set; excluded IDs win over included ones.
+// further narrow the set; excluded IDs win over included ones. Run and
+// RunScenario return ErrUnknownCheckID, naming them, if an ID matches no check.
+// (FilterChecks, which has no error to return, ignores such IDs.)
 func WithOnly(ids ...CheckID) RunOption {
 	return func(cfg *runConfig) {
 		if cfg.only == nil {
@@ -102,11 +108,39 @@ func inFold(v string, set []string) bool {
 // still wins over the closure). With no opts, checks is returned unchanged.
 // Use it to know how many checks a run will execute before starting it.
 func FilterChecks(checks []Check, opts ...RunOption) []Check {
+	return newRunConfig(opts).filter(checks)
+}
+
+func newRunConfig(opts []RunOption) runConfig {
 	var cfg runConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	return cfg.filter(checks)
+	return cfg
+}
+
+// unknownOnly returns an ErrUnknownCheckID error naming the WithOnly IDs that
+// match none of checks, or nil. A typo in WithOnly would otherwise silently
+// select nothing.
+func (cfg runConfig) unknownOnly(checks []Check) error {
+	if len(cfg.only) == 0 {
+		return nil
+	}
+	known := make(map[CheckID]struct{}, len(checks))
+	for _, c := range checks {
+		known[c.ID] = struct{}{}
+	}
+	var unknown []string
+	for id := range cfg.only {
+		if _, ok := known[id]; !ok {
+			unknown = append(unknown, string(id))
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return fmt.Errorf("%w: %s", ErrUnknownCheckID, strings.Join(unknown, ", "))
 }
 
 func (cfg runConfig) matches(c Check) bool {

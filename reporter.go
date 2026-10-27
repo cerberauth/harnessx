@@ -40,8 +40,10 @@ type ResourcePlanReporter interface {
 //
 // TotalChecks counts scheduled checks, a per-resource check counting once;
 // Executed, Skipped and Failed count individual executions, so a per-resource
-// check adds one per resource. Results and Observations are in completion
-// order, which is not deterministic across concurrent checks.
+// check adds one per resource. Results and Observations are ordered by
+// dependency level, then check ID, then resource ID, so a scan always reports in
+// the same order whatever order the concurrent checks finished in. If the scan
+// is cancelled, the checks that did not run are included as skipped results.
 type ScanSummary struct {
 	Target       Target
 	TotalChecks  int

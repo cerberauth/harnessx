@@ -3,6 +3,7 @@ package harnessx
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -277,16 +278,16 @@ func TestEngine_SkipReasons(t *testing.T) {
 	if got := resultFor(t, summary, "cond").SkipReason; got != "condition not met" {
 		t.Errorf("condition skip reason = %q, want %q", got, "condition not met")
 	}
-	if got := resultFor(t, summary, "orphan").SkipReason; got != "no resources discovered" {
-		t.Errorf("no-resources skip reason = %q, want %q", got, "no resources discovered")
+	if got := resultFor(t, summary, "orphan").SkipReason; !strings.HasPrefix(got, "no resources discovered") || !strings.Contains(got, "DependsOn") {
+		t.Errorf("no-resources skip reason = %q, want it to explain the missing DependsOn", got)
 	}
 }
 
 func TestEngine_DuplicateResourceIDsRunOnce(t *testing.T) {
 	var runs atomic.Int64
 	summary, err := runEngine(t,
-		discover("d1", Resource{ID: dupResourceID, URL: "first"}, Resource{ID: "other"}),
-		discover("d2", Resource{ID: dupResourceID, URL: "second"}),
+		discover("d1", Resource{ID: dupResourceID, URL: "url-one"}, Resource{ID: "other"}),
+		discover("d2", Resource{ID: dupResourceID, URL: "url-two"}),
 		resourceCheck("each", []CheckID{"d1", "d2"}, func(context.Context, Target, Resource, ResultStore) (Result, error) {
 			runs.Add(1)
 			return Result{}, nil
