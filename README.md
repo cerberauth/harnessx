@@ -165,10 +165,19 @@ import "github.com/cerberauth/harnessx/checkdef"
 
 type CheckDef = checkdef.CheckDef // ID, Name, Description, Link, Tags, DependsOn, CVSSVector, CVSSScore, CWEID, CAPECID, OWASP, Extra
 
+func ParseCheckDefYAML(data []byte) (CheckDef, error)
+func ParseCheckDefTOML(data []byte) (CheckDef, error)
+func ParseCheckDefJSON(data []byte) (CheckDef, error)
+
+// Panic (prefixed with pkg) instead of returning an error — for definitions embedded in the program.
 func MustParseCheckDefYAML(pkg string, data []byte) CheckDef
 func MustParseCheckDefTOML(pkg string, data []byte) CheckDef
 func MustParseCheckDefJSON(pkg string, data []byte) CheckDef
+
+func (d CheckDef) Validate() error // id required, cvss_score in [0, 10], no empty or self depends_on, ...
 ```
+
+The parsers are strict: an unknown key (a typo such as `depend_on`) is an error rather than a silently dropped field, and the result is checked with `Validate`.
 
 Each `MustParse*` panics (prefixed with `pkg`) on malformed input — definitions are typically parsed once at `init()` time from an `//go:embed`ded file, so a bad definition is a build-time bug, not a runtime error to recover from.
 

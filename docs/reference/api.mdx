@@ -505,12 +505,24 @@ func (d CheckDef) WithCAPECID(id string) CheckDef
 func (d CheckDef) WithOWASP(owasp string) CheckDef
 func (d CheckDef) WithExtra(extra map[string]any) CheckDef
 
+// Validate reports every problem at once: an empty id, a cvss_score outside
+// [0, 10], an empty or self-referencing depends_on entry, an empty tag.
+func (d CheckDef) Validate() error
+
+func ParseCheckDefYAML(data []byte) (CheckDef, error)
+func ParseCheckDefTOML(data []byte) (CheckDef, error)
+func ParseCheckDefJSON(data []byte) (CheckDef, error)
+
 func MustParseCheckDefYAML(pkg string, data []byte) CheckDef
 func MustParseCheckDefTOML(pkg string, data []byte) CheckDef
 func MustParseCheckDefJSON(pkg string, data []byte) CheckDef
 ```
 
-Each `MustParse*` panics, prefixed with `pkg`, on malformed input — definitions are typically parsed once at `init()` time from an `//go:embed`ded file, so a bad definition is a build-time bug rather than something to recover from at runtime.
+The `Parse*` functions are strict: an unknown key (a typo such as `depend_on` for `depends_on`) is an error rather than a silently dropped field, JSON with trailing data is rejected, and the result must pass `Validate`. Free-form fields belong under `extra`.
+
+Each `MustParse*` is the `Parse*` function that panics, prefixed with `pkg`, on malformed or invalid input — definitions are typically parsed once at `init()` time from an `//go:embed`ded file, so a bad definition is a build-time bug rather than something to recover from at runtime.
+
+`NewCheck` and friends copy `Tags`, so changing one check's tags does not change the `CheckDef` or other checks built from it.
 
 ### NewCheck / NewResourceCheck
 

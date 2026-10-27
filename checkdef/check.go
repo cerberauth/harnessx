@@ -1,6 +1,7 @@
 package checkdef
 
 import (
+	"slices"
 	"time"
 
 	"github.com/cerberauth/harnessx"
@@ -94,7 +95,7 @@ func buildBase(def CheckDef, opts []Option) harnessx.Check {
 		Name:        def.Name,
 		Description: def.Description,
 		Link:        def.Link,
-		Tags:        def.Tags,
+		Tags:        slices.Clone(def.Tags),
 		DependsOn:   def.DependsOnIDs(),
 		CVSSVector:  def.CVSSVector,
 		CVSSScore:   def.CVSSScore,
