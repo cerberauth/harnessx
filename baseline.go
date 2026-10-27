@@ -193,24 +193,18 @@ func NewBaselineCheck(cfg BaselineCheckConfig) Check {
 				return Result{}, err
 			}
 
-			return Result{Observations: compareSnapshots(cfg.Compare, baseline, current, cfg.ID, resource.ID)}, nil
+			return Result{Observations: compareSnapshots(cfg.Compare, baseline, current)}, nil
 		},
 	}
 }
 
-// compareSnapshots runs compare (CompareStatusCode when nil) and stamps the
-// resulting observations with the check and resource they belong to. It is the
+// compareSnapshots runs compare, or CompareStatusCode when it is nil. It is the
 // comparison step shared by the per-resource and global baseline checks.
-func compareSnapshots(compare BaselineComparator, baseline, current Snapshot, id CheckID, resourceID string) []Observation {
+func compareSnapshots(compare BaselineComparator, baseline, current Snapshot) []Observation {
 	if compare == nil {
 		compare = CompareStatusCode
 	}
-	obs := compare(baseline, current)
-	for i := range obs {
-		obs[i].CheckID = id
-		obs[i].ResourceID = resourceID
-	}
-	return obs
+	return compare(baseline, current)
 }
 
 // errMisconfigured is the error a baseline check returns when it was built from
@@ -344,7 +338,7 @@ func NewGlobalBaselineCheck(cfg GlobalBaselineCheckConfig) Check {
 				return Result{}, err
 			}
 
-			return Result{Observations: compareSnapshots(cfg.Compare, baseline, current, cfg.ID, "")}, nil
+			return Result{Observations: compareSnapshots(cfg.Compare, baseline, current)}, nil
 		},
 	}
 }

@@ -71,8 +71,9 @@ func WithReporters(reporters ...Reporter) Option {
 	}
 }
 
-// WithChecks registers checks when the engine is created. A registration error
-// such as a duplicate ID is not reported; see Engine.Register.
+// WithChecks registers checks when the engine is created. New cannot return a
+// registration error such as a duplicate ID, so Run returns it instead and runs
+// nothing; use Engine.Register to see it right away.
 func WithChecks(checks ...Check) Option {
 	return func(cfg *engineConfig) {
 		cfg.initialChecks = append(cfg.initialChecks, checks...)
@@ -86,13 +87,14 @@ func WithChecks(checks ...Check) Option {
 type ResourceMergeFunc func(existing, incoming Resource) Resource
 
 // KeepFirstResource is the default ResourceMergeFunc: the first resource
-// discovered under an ID wins.
+// discovered under an ID wins. Checks in the same dependency level run
+// concurrently, so which of their versions comes first is not deterministic;
+// make one check depend on the other to fix the order.
 func KeepFirstResource(existing, _ Resource) Resource { return existing }
 
 // KeepLastResource is a ResourceMergeFunc under which the most recently
-// discovered version of a resource wins. Checks in the same dependency level run
-// concurrently, so which of their versions is last is not deterministic; make
-// the later check depend on the earlier one to fix the order.
+// discovered version of a resource wins. As with KeepFirstResource, the order
+// between checks of the same dependency level is not deterministic.
 func KeepLastResource(_, incoming Resource) Resource { return incoming }
 
 // WithResourceMerge sets how the engine resolves two discoveries of the same

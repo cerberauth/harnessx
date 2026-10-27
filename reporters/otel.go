@@ -207,9 +207,13 @@ func (o *OTelReporter) OnCheckComplete(result harnessx.Result) {
 			attribute.String("status", status),
 		),
 	)
-	o.checkDuration.Record(o.baseCtx, result.Duration.Seconds(),
-		metric.WithAttributes(attribute.String("check.id", string(result.CheckID))),
-	)
+	// A check skipped before it started has no duration; recording a zero would
+	// drag the histogram down.
+	if started {
+		o.checkDuration.Record(o.baseCtx, result.Duration.Seconds(),
+			metric.WithAttributes(attribute.String("check.id", string(result.CheckID))),
+		)
+	}
 
 	if len(result.Observations) > 0 {
 		o.observationCounter.Add(o.baseCtx, int64(len(result.Observations)),

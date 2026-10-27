@@ -284,6 +284,8 @@ type Attempt struct {
     Variant      string
     Observations []Observation
     Resources    []Resource
+    Skipped      bool
+    SkipReason   string
     Duration     time.Duration
     Data         any
     Err          error
@@ -766,6 +768,8 @@ type Attempt struct {
     Variant      string
     Observations []Observation
     Resources    []Resource
+    Skipped      bool
+    SkipReason   string
     Duration     time.Duration
     Data         any
     Err          error

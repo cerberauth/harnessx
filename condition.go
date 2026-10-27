@@ -36,7 +36,7 @@ func IfCheckSkipped(id CheckID) Condition {
 		if !ok {
 			return false
 		}
-		return r.Skipped
+		return r.Status() == StatusSkipped
 	}
 }
 
