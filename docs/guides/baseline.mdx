@@ -24,7 +24,7 @@ type Snapshot struct {
 type Baseline = Snapshot
 ```
 
-`StatusCode` is what the default comparator looks at. `Header`, `Body`, and `Duration` carry the full response; `Data` carries anything else custom comparators need. `harnessx.CaptureSnapshot(ctx, p, build)` builds a `Snapshot` from a `probe.Probe` and a `probe.RequestBuilder` for you (the snippets below use it, with `p := probe.New()`).
+`StatusCode` is what the default comparator looks at. `Header`, `Body`, and `Duration` carry the full response; `Data` carries anything else custom comparators need. `harnessx.CaptureSnapshot(ctx, client, build)` builds a `Snapshot` for you from a `probe.RequestBuilder` and any client — a `*probe.Probe` or a plain `*http.Client` (the snippets below use it, with `p := probe.New()`).
 
 ## Baseline-probe workflow
 

@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,11 @@ const DefaultMaxBodySize = 10 << 20 // 10 MiB
 // maxDrainSize bounds how much of an over-limit body is discarded before the
 // connection is closed, so a hostile endless stream cannot stall the caller.
 const maxDrainSize = 64 << 10
+
+// Doer sends an HTTP request. *http.Client and *Probe implement it.
+type Doer interface {
+	Do(*http.Request) (*http.Response, error)
+}
 
 // Response is a fully-read HTTP response captured by DoResponse.
 type Response struct {
@@ -50,7 +56,7 @@ func WithMaxBodySize(n int64) DoOption {
 //
 // Deprecated: Use DoResponse, which returns the same data as one Response, also
 // reports truncation, and accepts options such as WithMaxBodySize.
-func Do(ctx context.Context, client *http.Client, req *http.Request) (statusCode int, header http.Header, body []byte, duration time.Duration, err error) {
+func Do(ctx context.Context, client Doer, req *http.Request) (statusCode int, header http.Header, body []byte, duration time.Duration, err error) {
 	resp, err := DoResponse(ctx, client, req)
 	if err != nil {
 		return 0, nil, nil, 0, err
@@ -62,7 +68,10 @@ func Do(ctx context.Context, client *http.Client, req *http.Request) (statusCode
 // is capped at DefaultMaxBodySize bytes unless WithMaxBodySize says otherwise;
 // when the server sends more, Response.Truncated is set. The response body is
 // closed before DoResponse returns.
-func DoResponse(ctx context.Context, client *http.Client, req *http.Request, opts ...DoOption) (Response, error) {
+func DoResponse(ctx context.Context, client Doer, req *http.Request, opts ...DoOption) (Response, error) {
+	if client == nil {
+		return Response{}, errors.New("probe: nil client")
+	}
 	cfg := doConfig{maxBodySize: DefaultMaxBodySize}
 	for _, o := range opts {
 		o(&cfg)

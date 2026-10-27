@@ -82,18 +82,23 @@ func CompareStatusCode(baseline, current Snapshot) []Observation {
 	return statusDeviation(baseline, current)
 }
 
-// CaptureSnapshot sends the request returned by build via probe.DoResponse and
-// returns the response as a Snapshot: status, headers, body (capped at
-// probe.DefaultMaxBodySize, with Truncated set when cut), duration and
-// BodyHash. It is the building block for a baseline — typically a request to
-// a random, certainly-absent path, so a catch-all "soft 404" answer can be
-// told apart from a real page with CompareSimilarity.
-func CaptureSnapshot(ctx context.Context, p *probe.Probe, build probe.RequestBuilder) (Snapshot, error) {
+// CaptureSnapshot sends the request returned by build through client, via
+// probe.DoResponse, and returns the response as a Snapshot: status, headers,
+// body (capped at probe.DefaultMaxBodySize unless opts say otherwise, with
+// Truncated set when cut), duration and BodyHash. It is the building block for
+// a baseline — typically a request to a random, certainly-absent path, so a
+// catch-all "soft 404" answer can be told apart from a real page with
+// CompareSimilarity.
+//
+// client is anything that can send a request: a *probe.Probe, or a plain
+// *http.Client with its own transport and redirect policy. opts are passed on
+// to probe.DoResponse, e.g. probe.WithMaxBodySize.
+func CaptureSnapshot(ctx context.Context, client probe.Doer, build probe.RequestBuilder, opts ...probe.DoOption) (Snapshot, error) {
 	req, err := build(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	resp, err := probe.DoResponse(ctx, p.Client(), req)
+	resp, err := probe.DoResponse(ctx, client, req, opts...)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -119,8 +124,8 @@ func CaptureSnapshot(ctx context.Context, p *probe.Probe, build probe.RequestBui
 // With no comparators, only a change in status code counts as a deviation
 // (CompareStatusCode). Otherwise every comparator is applied and the response
 // deviates if any of them reports an observation, so comparators compose.
-func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID, comparators ...BaselineComparator) (Snapshot, bool, error) {
-	current, err := CaptureSnapshot(ctx, p, build)
+func ProbeAndCompareBaseline(ctx context.Context, client probe.Doer, build probe.RequestBuilder, store ResultStore, baselineID CheckID, comparators ...BaselineComparator) (Snapshot, bool, error) {
+	current, err := CaptureSnapshot(ctx, client, build)
 	if err != nil {
 		return Snapshot{}, false, err
 	}

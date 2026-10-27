@@ -619,3 +619,34 @@ func TestProbeAndCompareBaseline_NoBaseline_ReturnsErrNoBaseline(t *testing.T) {
 		t.Errorf("StatusCode = %d, want the captured %d", snap.StatusCode, http.StatusOK)
 	}
 }
+
+func TestCaptureSnapshot_AcceptsPlainHTTPClientAndOptions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("0123456789"))
+	}))
+	defer srv.Close()
+
+	build := func(ctx context.Context) (*http.Request, error) {
+		return probe.NewRequest(ctx, http.MethodGet, srv.URL, nil)
+	}
+	snap, err := CaptureSnapshot(context.Background(), srv.Client(), build, probe.WithMaxBodySize(4))
+	if err != nil {
+		t.Fatalf("CaptureSnapshot: %v", err)
+	}
+	if string(snap.Body) != "0123" || !snap.Truncated {
+		t.Errorf("Body = %q, Truncated = %v; want the body capped at 4 bytes by the option", snap.Body, snap.Truncated)
+	}
+}
+
+func TestCaptureSnapshot_NilClientIsAnError(t *testing.T) {
+	build := func(ctx context.Context) (*http.Request, error) {
+		return probe.NewRequest(ctx, http.MethodGet, "http://example.com", nil)
+	}
+	if _, err := CaptureSnapshot(context.Background(), nil, build); err == nil {
+		t.Error("nil client: want an error, not a panic")
+	}
+	var nilProbe *probe.Probe
+	if _, err := CaptureSnapshot(context.Background(), nilProbe, build); err == nil {
+		t.Error("nil *Probe: want an error, not a panic")
+	}
+}

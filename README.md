@@ -723,10 +723,11 @@ func NewRequestFromResource(ctx context.Context, r Resource, mutators ...probe.R
 
 // ProbeAndCompareBaseline sends the request returned by build via probe.DoResponse,
 // and compares the resulting Snapshot against the baseline stored under baselineID.
-func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID, comparators ...BaselineComparator) (Snapshot, bool, error)
+func ProbeAndCompareBaseline(ctx context.Context, client probe.Doer, build probe.RequestBuilder, store ResultStore, baselineID CheckID, comparators ...BaselineComparator) (Snapshot, bool, error)
 
-// CaptureSnapshot sends the request from build and returns it as a Snapshot.
-func CaptureSnapshot(ctx context.Context, p *probe.Probe, build probe.RequestBuilder) (Snapshot, error)
+// CaptureSnapshot sends the request from build through client (a *probe.Probe or
+// a plain *http.Client) and returns it as a Snapshot.
+func CaptureSnapshot(ctx context.Context, client probe.Doer, build probe.RequestBuilder, opts ...probe.DoOption) (Snapshot, error)
 
 // CompareStatusAndLength flags a status change or a body length outside ±tolerance.
 func CompareStatusAndLength(tolerance float64) BaselineComparator

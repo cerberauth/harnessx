@@ -179,8 +179,8 @@ func SimHash(body []byte) uint64
 ```
 
 - `CompareStatusCode` flags any change in status code.
-- `CompareStatusAndLength(tolerance)` flags a status change, or a body length outside ±`tolerance` of the baseline's (`0.1` allows ±10%). A negative tolerance is treated as `0`.
-- `CompareSimilarity(threshold)` flags a status change, or a body whose similarity to the baseline's falls below `threshold` (0..1, 1 = identical). Similarity is `1 −` the normalised Hamming distance between the two bodies' `SimHash`es, so a catch-all "not found" page that echoes the requested path scores high while a genuinely different page scores low. A typical threshold is 0.8–0.95. A non-zero `Snapshot.BodyHash` is used instead of hashing `Body`.
+- `CompareStatusAndLength(tolerance)` flags a status change, or a body length outside ±`tolerance` of the baseline's (`0.1` allows ±10%). A negative tolerance is treated as `0`. If either snapshot is `Truncated` its length is not the response's length, so the length check is skipped and only the status is compared.
+- `CompareSimilarity(threshold)` flags a status change, or a body whose similarity to the baseline's falls below `threshold` (0..1, 1 = identical; out-of-range values are clamped). Similarity is `1 −` the normalised Hamming distance between the two bodies' `SimHash`es, so a catch-all "not found" page that echoes the requested path scores high while a genuinely different page scores low. A typical threshold is 0.8–0.95. A non-zero `Snapshot.BodyHash` is used instead of hashing `Body`. With a `Truncated` snapshot the similarity is that of the captured prefixes, and a reported deviation says so.
 - `SimHash` returns a 64-bit locality-sensitive fingerprint over the case-insensitive letter/digit tokens of `body`; an empty or token-free body hashes to `0`.
 
 Length and similarity are computed on `Snapshot.Body`, which is capped by the probe's body limit — check `Snapshot.Truncated` before trusting them on very large responses.
@@ -328,19 +328,22 @@ func ApplyCredential(req *http.Request, value string, loc CredentialLocation) (*
 func New(opts ...Option) *Probe
 func (p *Probe) Client() *http.Client
 func (p *Probe) RoundTrip(req *http.Request) (*http.Response, error)
+func (p *Probe) Do(req *http.Request) (*http.Response, error) // via Client(); an error, not a panic, on a nil *Probe
 
 func WithUserAgent(ua string) Option          // default for requests that set none; a caller-set User-Agent is never overridden
 func WithMaxRetries(n int) Option             // 0 = a single attempt (default 3)
 func WithRetryDelay(d time.Duration) Option   // base backoff delay, capped at 60s (default 500ms)
 func WithTransport(t http.RoundTripper) Option
-func WithTimeout(d time.Duration) Option      // timeout of Client(), retries included (default 30s)
+func WithTimeout(d time.Duration) Option      // timeout of Client(), retries and waits included (default 30s; 0 = none)
+func WithNoRedirects() Option                 // Client() returns 3xx responses instead of following them
+func WithCheckRedirect(fn func(req *http.Request, via []*http.Request) error) Option
 func WithRetryNonIdempotent() Option          // also retry POST/PATCH on network errors and 503
 func WithRateLimiter(l *rate.Limiter) Option  // waits before every attempt, retries included
 
 var ErrMaxRetriesExceeded error
 ```
 
-Non-idempotent requests are retried on `429` only, unless `WithRetryNonIdempotent` is set. `RoundTrip` does not modify the request it is given (it reads the body through `GetBody` when set), and sends an empty body with a known zero length rather than chunked. `X-RateLimit-Reset` is read as an epoch timestamp, or as seconds until reset when below 10⁹.
+Non-idempotent requests are retried on `429` only, unless `WithRetryNonIdempotent` is set. Only transient network errors are retried — timeouts, connection reset/refused/aborted, a broken pipe, an unexpected EOF, temporary DNS failures; permanent ones such as an unknown host or a TLS certificate that does not verify are returned at once. By default `Client()` follows up to 10 redirects, which hides the 3xx response and can leave the target host; use `WithNoRedirects` or `WithCheckRedirect` to change that. `WithTimeout` bounds the whole request as the caller sees it — every attempt, backoff sleep and `Retry-After` wait included — and `0` disables it. `RoundTrip` does not modify the request it is given (it reads the body through `GetBody` when set), and sends an empty body with a known zero length rather than chunked. `X-RateLimit-Reset` is read as an epoch timestamp, or as seconds until reset when below 10⁹.
 
 ### Do / DoResponse
 
@@ -360,18 +363,20 @@ type Response struct {
 type DoOption func(*doConfig)
 func WithMaxBodySize(n int64) DoOption // n <= 0 means unlimited
 
-func DoResponse(ctx context.Context, client *http.Client, req *http.Request, opts ...DoOption) (Response, error)
-func Do(ctx context.Context, client *http.Client, req *http.Request) (statusCode int, header http.Header, body []byte, duration time.Duration, err error)
+type Doer interface{ Do(*http.Request) (*http.Response, error) } // *http.Client and *Probe implement it
+
+func DoResponse(ctx context.Context, client Doer, req *http.Request, opts ...DoOption) (Response, error)
+func Do(ctx context.Context, client Doer, req *http.Request) (statusCode int, header http.Header, body []byte, duration time.Duration, err error)
 ```
 
 `Do` is deprecated: it is `DoResponse` with the default cap and no truncation signal. Use `DoResponse`.
 
 ### CaptureSnapshot
 
-Sends the request returned by a `probe.RequestBuilder` via `probe.DoResponse` and returns the response as a `Snapshot`: status, headers, body (capped at `probe.DefaultMaxBodySize`, with `Truncated` set when cut), duration and `BodyHash`. The building block for a baseline — typically a request to a random, certainly-absent path, so a catch-all "soft 404" can be told apart from a real page with `CompareSimilarity`.
+Sends the request returned by a `probe.RequestBuilder` via `probe.DoResponse`, through `client` (a `*probe.Probe` or a plain `*http.Client`, with its own transport and redirect policy), and returns the response as a `Snapshot`: status, headers, body (capped at `probe.DefaultMaxBodySize`, with `Truncated` set when cut), duration and `BodyHash`. The building block for a baseline — typically a request to a random, certainly-absent path, so a catch-all "soft 404" can be told apart from a real page with `CompareSimilarity`.
 
 ```go
-func CaptureSnapshot(ctx context.Context, p *probe.Probe, build probe.RequestBuilder) (Snapshot, error)
+func CaptureSnapshot(ctx context.Context, client probe.Doer, build probe.RequestBuilder, opts ...probe.DoOption) (Snapshot, error)
 ```
 
 ### ProbeAndCompareBaseline
@@ -379,7 +384,7 @@ func CaptureSnapshot(ctx context.Context, p *probe.Probe, build probe.RequestBui
 Captures the request returned by a `probe.RequestBuilder` (see [CaptureSnapshot](#capturesnapshot)) and compares it against the baseline stored under `baselineID`. Useful for one-off probes (credential swaps, header/param tampering, auth-bypass checks) that don't need the full `NewBaselineCheck` wiring.
 
 ```go
-func ProbeAndCompareBaseline(ctx context.Context, p *probe.Probe, build probe.RequestBuilder, store ResultStore, baselineID CheckID, comparators ...BaselineComparator) (Snapshot, bool, error)
+func ProbeAndCompareBaseline(ctx context.Context, client probe.Doer, build probe.RequestBuilder, store ResultStore, baselineID CheckID, comparators ...BaselineComparator) (Snapshot, bool, error)
 ```
 
 With no comparators, only a change in status code counts as a deviation (`CompareStatusCode`). Otherwise every comparator is applied and the response deviates if any of them reports an observation, so comparators compose. Returns the captured `Snapshot` and whether it deviated. Building a `Result`/`Observation` from that is left to the caller.
