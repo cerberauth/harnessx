@@ -153,6 +153,7 @@ type Check struct {
 
     Timeout     time.Duration  // 0 → engine default (30s)
     Concurrency int            // per-resource parallelism; 0 → engine default
+    Internal    bool           // plumbing check hidden from reporters and the summary
 }
 ```
 
@@ -606,11 +607,28 @@ See the [Baseline Comparison guide](/guides/baseline) and [`examples/baseline-sc
 
 ---
 
+### Check Packs
+
+A check pack is the set of checks a harnessx-based tool ships. Pack IDs are `<pack>.<snake_case>`, findings are `Observations`, plumbing checks are `Internal`, and the pack exposes one context constructor and one function returning its checks. `harnessx/embed` registers a pack in another engine, converting scope, scoping the store to the current resource and prefixing IDs:
+
+```go
+checks, err := embed.Checks(pack.Checks(), embed.Options{
+    Scope:     harnessx.ScopePerResource,
+    DependsOn: []harnessx.CheckID{"api.discover"},
+    Context: func(ctx context.Context, target harnessx.Target, res *harnessx.Resource) (any, error) {
+        return pack.NewContext(res.URL), nil
+    },
+})
+```
+
+See the [Check Packs guide](./docs/guides/check-packs.mdx) and [`examples/check-pack`](./examples/check-pack/main.go).
+
 ## Examples
 
 - [Advanced Scan](./examples/advanced-scan/main.go): A comprehensive example demonstrating multi-level dependencies, resource discovery, custom conditions, and a pretty-printing reporter.
 - [Multi-Scenario Scan](./examples/multi-scenario/main.go): REST API and GraphQL API scenarios sharing business logic with different dependency graphs. Select a scenario at runtime via CLI argument.
 - [Baseline Scan](./examples/baseline-scan/main.go): Detects an authorization bypass by comparing live HTTP responses against a per-resource baseline — one captured at runtime, one defined manually.
+- [Check Pack](./examples/check-pack/main.go): Embeds a small ScopeGlobal check pack in a host engine that runs it once per discovered endpoint, with an internal fetch check.
 
 ---
 

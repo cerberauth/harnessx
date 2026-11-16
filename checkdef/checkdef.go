@@ -30,6 +30,7 @@ type CheckDef struct {
 	CWEID       string   `yaml:"cwe_id" toml:"cwe_id" json:"cwe_id"`
 	CAPECID     string   `yaml:"capec_id" toml:"capec_id" json:"capec_id"`
 	OWASP       string   `yaml:"owasp" toml:"owasp" json:"owasp"`
+	Internal    bool     `yaml:"internal" toml:"internal" json:"internal"`
 
 	// Extra holds def-specific fields this package doesn't know about yet,
 	// nested under an "extra" key so it parses the same way across

@@ -117,6 +117,11 @@ func runVariantAttempt(ctx context.Context, variant string, timeout time.Duratio
 	return attempt
 }
 
+// AggregateAttempts merges attempts into one Result the way RunVariants does.
+func AggregateAttempts(attempts []Attempt) Result {
+	return aggregateAttempts(attempts)
+}
+
 func aggregateAttempts(attempts []Attempt) Result {
 	result := Result{Attempts: attempts}
 	skipped := 0

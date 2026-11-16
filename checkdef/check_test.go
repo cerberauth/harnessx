@@ -161,3 +161,13 @@ func TestNewVariantResourceCheck(t *testing.T) {
 		t.Errorf("Concurrency: want 4, got %d", check.Concurrency)
 	}
 }
+
+func TestNewCheck_Internal(t *testing.T) {
+	def := MustParseCheckDefYAML("internal", []byte("id: pack.fetch\nname: Fetch\ninternal: true\n"))
+	check := NewCheck(def, func(context.Context, harnessx.Target, harnessx.ResultStore) (harnessx.Result, error) {
+		return harnessx.Result{}, nil
+	})
+	if !check.Internal {
+		t.Error("Internal not carried from the definition")
+	}
+}

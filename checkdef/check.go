@@ -102,6 +102,7 @@ func buildBase(def CheckDef, opts []Option) harnessx.Check {
 		CWEID:       def.CWEID,
 		CAPECID:     def.CAPECID,
 		OWASP:       def.OWASP,
+		Internal:    def.Internal,
 		Skip:        cfg.skip,
 		Conditions:  cfg.conditions,
 		Timeout:     cfg.timeout,
