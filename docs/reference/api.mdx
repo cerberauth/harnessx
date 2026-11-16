@@ -659,6 +659,32 @@ func MustChecks(pack []harnessx.Check, opts Options) []harnessx.Check
 func Select(pack []harnessx.Check, ids ...harnessx.CheckID) ([]harnessx.Check, error)
 ```
 
+### callback
+
+Out-of-band interaction confirmation. See the [Out-of-band Callbacks guide](/guides/callback).
+
+```go
+type Collector interface {
+  NewToken(checkID, resourceID string) (url, id string)
+  Received(ctx context.Context, id string) (Hit, bool)
+  Handle(id string, h http.Handler) error
+  Close() error
+}
+
+type Hit struct {
+  ID, CheckID, ResourceID string
+  Time                    time.Time
+  RemoteAddr, Method, Path string
+  Header                  http.Header
+  Body                    []byte
+  BodyTruncated           bool
+}
+
+func Listen(ctx context.Context, opts ListenerOptions) (*Listener, error)
+func NewPoller(opts PollerOptions) *Poller
+func WaitReceived(ctx context.Context, c Collector, id string, timeout time.Duration) (Hit, bool)
+```
+
 ### ScanSummary
 
 Summary of scan results, returned by `Run` / `RunScenario` and passed to `Reporter.OnScanComplete`.
