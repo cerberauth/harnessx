@@ -236,6 +236,18 @@ var Check = checkdef.NewCheck(def, run,
 
 `checkdef` is a separate package (in the same module) from root `harnessx`, so the YAML/TOML parsers are only compiled into binaries that import `checkdef`.
 
+#### CVSS scores
+
+`cvss.Score` computes the CVSS v4.0 score of a vector exactly as the [FIRST calculator](https://www.first.org/cvss/calculator/4.0) does. `CheckDef.ValidateCVSS` checks that a definition's `cvss_score` matches its `cvss_vector`; call it from a test over every check definition so a hand-written score cannot drift:
+
+```go
+for _, def := range defs {
+	if err := def.ValidateCVSS(); err != nil {
+		t.Error(err)
+	}
+}
+```
+
 ### Scopes
 
 | Scope | Runs | Function |

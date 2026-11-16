@@ -2,6 +2,7 @@ package checkdef
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/cerberauth/harnessx"
@@ -81,5 +82,31 @@ func TestCheckDef_WithSetters(t *testing.T) {
 
 	if orig.Name != "orig" || orig.Link != "https://orig.example.com" {
 		t.Errorf("WithX must not mutate the receiver, orig changed: %#v", orig)
+	}
+}
+
+func TestCheckDef_ValidateCVSS(t *testing.T) {
+	const vector = "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
+	testCases := []struct {
+		name string
+		def  CheckDef
+		err  string
+	}{
+		{"no vector", CheckDef{ID: "a"}, ""},
+		{"matching score", CheckDef{ID: "a", CVSSVector: vector, CVSSScore: 8.6}, ""},
+		{"wrong score", CheckDef{ID: "a", CVSSVector: vector, CVSSScore: 8.2}, "which scores 8.6"},
+		{"invalid vector", CheckDef{ID: "a", CVSSVector: "CVSS:4.0/AV:N", CVSSScore: 1}, "invalid CVSS v4.0 vector"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.def.ValidateCVSS()
+
+			switch {
+			case tc.err == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tc.err != "" && (err == nil || !strings.Contains(err.Error(), tc.err)):
+				t.Fatalf("got %v, want error containing %q", err, tc.err)
+			}
+		})
 	}
 }

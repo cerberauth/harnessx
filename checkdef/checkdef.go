@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/cerberauth/harnessx"
+	"github.com/cerberauth/harnessx/cvss"
 )
 
 // CheckDef mirrors the descriptive fields of harnessx.Check (everything
@@ -64,6 +65,23 @@ func (d CheckDef) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// ValidateCVSS checks that CVSSVector is a valid CVSS v4.0 vector and that
+// CVSSScore is the score the FIRST calculator gives it. A definition without
+// a vector is valid.
+func (d CheckDef) ValidateCVSS() error {
+	if d.CVSSVector == "" {
+		return nil
+	}
+	score, err := cvss.Score(d.CVSSVector)
+	if err != nil {
+		return fmt.Errorf("check %q: %w", d.ID, err)
+	}
+	if math.Abs(score-d.CVSSScore) > 1e-9 {
+		return fmt.Errorf("check %q: cvss_score %v does not match %s, which scores %v", d.ID, d.CVSSScore, d.CVSSVector, score)
+	}
+	return nil
 }
 
 // DependsOnIDs converts DependsOn to []harnessx.CheckID for direct use in
