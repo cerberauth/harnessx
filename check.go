@@ -78,10 +78,14 @@ const (
 // need not set CheckID, ResourceID or Variant: the engine fills each one left
 // empty with the check, the resource (for a ScopePerResource check) and the
 // variant (for a check with Variants) that produced the observation.
+//
+// Identities is filled the same way with the identity, or ordered identity
+// pair, of a check with an IdentityMode.
 type Observation struct {
 	CheckID     CheckID
 	ResourceID  string
 	Variant     string
+	Identities  []string
 	Title       string
 	Description string
 	Evidence    string
@@ -107,6 +111,9 @@ type Result struct {
 	Data         any
 	Err          error
 	Attempts     []Attempt
+	// Identities is the identity, or ordered identity pair, the result was
+	// produced as; empty for a check without an IdentityMode.
+	Identities []string
 }
 
 // ResultStatus classifies a Result; see Result.Status.
@@ -139,9 +146,12 @@ func (r Result) Status() ResultStatus {
 }
 
 // Attempt is the outcome of one variant of a check with Variants, recorded in
-// Result.Attempts in the order of Check.Variants.
+// Result.Attempts in the order of Check.Variants, or of one identity or
+// identity pair of a check with an IdentityMode, recorded in the order of
+// Target.Identities.
 type Attempt struct {
 	Variant      string
+	Identities   []string
 	Observations []Observation
 	Resources    []Resource
 	Skipped      bool
@@ -263,6 +273,16 @@ type Check struct {
 	// its result is readable by dependent checks, but reporters and the
 	// ScanSummary never see it.
 	Internal bool
+
+	// IdentityMode fans the check out over Target.Identities: once per
+	// identity, or once per ordered pair of distinct identities. Each run is
+	// recorded as an Attempt, and its result is readable with GetForIdentity.
+	// The runs of a ScopePerResource check share its per-resource concurrency.
+	IdentityMode IdentityMode
+	// RequiresIdentities is how many identities the check needs; with fewer
+	// configured it is skipped. IdentityPairs needs at least 2 and
+	// IdentitiesEach at least 1 whatever its value.
+	RequiresIdentities int
 }
 
 // skipReason returns why c should not run against store, or "" if it should:
@@ -285,6 +305,12 @@ func (c Check) skipReason(ctx context.Context, target Target, store ResultStore)
 func (c Check) validate() error {
 	if c.Scope != ScopeGlobal && c.Scope != ScopePerResource {
 		return fmt.Errorf("harnessx: check %q has invalid Scope %d", c.ID, c.Scope)
+	}
+	if c.IdentityMode < IdentitiesNone || c.IdentityMode > IdentityPairs {
+		return fmt.Errorf("harnessx: check %q has invalid IdentityMode %d", c.ID, c.IdentityMode)
+	}
+	if c.IdentityMode != IdentitiesNone && len(c.Variants) > 0 {
+		return fmt.Errorf("harnessx: check %q sets both Variants and an IdentityMode", c.ID)
 	}
 	if c.Scope == ScopeGlobal && c.Skip.resourceFn != nil {
 		return fmt.Errorf("harnessx: check %q has ScopeGlobal but a per-resource Skip decision (SkipResourceWhen); use SkipWhen", c.ID)

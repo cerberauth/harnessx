@@ -68,6 +68,32 @@ func BaselineFromCheck(id CheckID) BaselineSource {
 	}
 }
 
+// BaselineFromIdentityCheck returns a BaselineSource that reads the baseline a
+// prior capture check with an identity (see CaptureBaselineCheckConfig.Identity
+// and IdentityMode) captured for a resource as identities. With no identities
+// it uses the identity the comparison runs as: the first of its IdentityPair,
+// or its IdentityFrom identity.
+func BaselineFromIdentityCheck(id CheckID, identities ...string) BaselineSource {
+	return func(ctx context.Context, _ Target, resource Resource, store ResultStore) (Baseline, bool) {
+		names := identities
+		if len(names) == 0 {
+			if pair, ok := IdentityPairFrom(ctx); ok {
+				names = []string{pair.First.Name}
+			} else if ident, ok := IdentityFrom(ctx); ok {
+				names = []string{ident.Name}
+			} else {
+				return Baseline{}, false
+			}
+		}
+		r, ok := GetForIdentity(store, id, resource.ID, names...)
+		if !ok {
+			return Baseline{}, false
+		}
+		b, ok := r.Data.(Baseline)
+		return b, ok
+	}
+}
+
 // BaselineComparator compares a baseline against a freshly captured snapshot
 // and returns any resulting Observations. A nil or empty result means no
 // deviation was found.
@@ -162,6 +188,13 @@ type BaselineCheckConfig struct {
 	// Defaults to CompareStatusCode when nil.
 	Compare BaselineComparator
 
+	// Identity runs the comparison as that identity of the target, read with
+	// IdentityFrom; the check is skipped when it is not configured.
+	// IdentityMode instead fans it out over the target's identities, for
+	// example IdentityPairs with BaselineFromIdentityCheck. Set at most one.
+	Identity     string
+	IdentityMode IdentityMode
+
 	Timeout     time.Duration
 	Concurrency int
 }
@@ -179,7 +212,10 @@ func NewBaselineCheck(cfg BaselineCheckConfig) Check {
 		Scope:       ScopePerResource,
 		Timeout:     cfg.Timeout,
 		Concurrency: cfg.Concurrency,
-		RunResource: func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error) {
+
+		IdentityMode:       cfg.IdentityMode,
+		RequiresIdentities: fixedIdentityRequirement(cfg.Identity),
+		RunResource: asIdentity(cfg.ID, cfg.Identity, cfg.IdentityMode, func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error) {
 			if cfg.Baseline == nil || cfg.Capture == nil {
 				return Result{}, errMisconfigured(cfg.ID, "Baseline and Capture are required")
 			}
@@ -194,7 +230,34 @@ func NewBaselineCheck(cfg BaselineCheckConfig) Check {
 			}
 
 			return Result{Observations: compareSnapshots(cfg.Compare, baseline, current)}, nil
-		},
+		}),
+	}
+}
+
+func fixedIdentityRequirement(name string) int {
+	if name != "" {
+		return 1
+	}
+	return 0
+}
+
+// asIdentity wraps run so it runs as the target identity named name, when set,
+// and records it on the Result.
+func asIdentity(id CheckID, name string, mode IdentityMode, run ResourceCheckFunc) ResourceCheckFunc {
+	if name == "" {
+		return run
+	}
+	return func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error) {
+		if mode != IdentitiesNone {
+			return Result{}, errMisconfigured(id, "set Identity or IdentityMode, not both")
+		}
+		ident, ok := target.IdentityByName(name)
+		if !ok {
+			return Result{Skipped: true, SkipReason: fmt.Sprintf("identity %q not configured", name)}, nil
+		}
+		r, err := run(ContextWithIdentity(ctx, ident), target, resource, store)
+		r.Identities = []string{name}
+		return r, err
 	}
 }
 
@@ -237,6 +300,13 @@ type CaptureBaselineCheckConfig struct {
 	// Capture performs the live attempt for one resource and returns its snapshot.
 	Capture func(ctx context.Context, target Target, resource Resource, store ResultStore) (Snapshot, error)
 
+	// Identity captures as that identity of the target, read with
+	// IdentityFrom; the check is skipped when it is not configured.
+	// IdentityMode instead captures once per identity. Read the captures back
+	// with BaselineFromIdentityCheck or GetForIdentity. Set at most one.
+	Identity     string
+	IdentityMode IdentityMode
+
 	Timeout     time.Duration
 	Concurrency int
 }
@@ -254,12 +324,15 @@ func NewCaptureBaselineCheck(cfg CaptureBaselineCheckConfig) Check {
 		Scope:       ScopePerResource,
 		Timeout:     cfg.Timeout,
 		Concurrency: cfg.Concurrency,
-		RunResource: func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error) {
+
+		IdentityMode:       cfg.IdentityMode,
+		RequiresIdentities: fixedIdentityRequirement(cfg.Identity),
+		RunResource: asIdentity(cfg.ID, cfg.Identity, cfg.IdentityMode, func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error) {
 			if cfg.Capture == nil {
 				return Result{}, errMisconfigured(cfg.ID, "Capture is required")
 			}
 			return captureResult(cfg.Capture(ctx, target, resource, store))
-		},
+		}),
 	}
 }
 

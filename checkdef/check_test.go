@@ -171,3 +171,12 @@ func TestNewCheck_Internal(t *testing.T) {
 		t.Error("Internal not carried from the definition")
 	}
 }
+
+func TestNewResourceCheck_IdentityOptions(t *testing.T) {
+	check := NewResourceCheck(wantTestCheckDef(), func(context.Context, harnessx.Target, harnessx.Resource, harnessx.ResultStore) (harnessx.Result, error) {
+		return harnessx.Result{}, nil
+	}, WithIdentityMode(harnessx.IdentityPairs), WithRequiresIdentities(3))
+	if check.IdentityMode != harnessx.IdentityPairs || check.RequiresIdentities != 3 {
+		t.Errorf("IdentityMode = %v, RequiresIdentities = %d", check.IdentityMode, check.RequiresIdentities)
+	}
+}

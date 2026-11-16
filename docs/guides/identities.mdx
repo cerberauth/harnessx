@@ -1,0 +1,89 @@
+---
+title: Multiple Identities
+description: Run checks as several named credential sets and compare how the target answers each
+sidebar:
+  order: 11
+---
+
+## Overview
+
+Authorization flaws only show when the same request is sent as different users: an invoice one customer can read with another customer's token, an admin route a regular user reaches. A target can carry several named identities, and a check can fan out over them.
+
+```go
+target := harnessx.Target{
+  URL: "https://api.example.com",
+  Identities: []harnessx.Identity{
+    {Name: "alice", Metadata: map[string]string{"role": "customer", "tenant": "a"}, Data: aliceToken},
+    {Name: "bob", Metadata: map[string]string{"role": "customer", "tenant": "b"}, Data: bobToken},
+  },
+}
+```
+
+`Data` is opaque to the engine: put whatever your checks need to act as that identity there (a token, a cookie, a `probe.RequestMutator`). Names must be unique and non-empty.
+
+With no identities configured, nothing changes: every check runs exactly as before.
+
+## Fan-out modes
+
+| `Check.IdentityMode` | Runs | Read with |
+|---|---|---|
+| `IdentitiesNone` (default) | once | — |
+| `IdentitiesEach` | once per identity | `harnessx.IdentityFrom(ctx)` |
+| `IdentityPairs` | once per ordered pair of distinct identities | `harnessx.IdentityPairFrom(ctx)` |
+
+A `ScopePerResource` check fans out per resource and per identity (or pair). All those runs share the check's per-resource concurrency limit (`Check.Concurrency`, or `WithMaxResourceConcurrency`), so adding identities never multiplies the load.
+
+Each run is recorded as an `Attempt` with its `Identities` (`["alice"]`, or `["alice", "bob"]` for a pair), in the order of `Target.Identities`, and its observations carry the same `Identities`. The resource's `Result` merges them like variants do.
+
+## Requirements
+
+`RequiresIdentities` declares how many identities a check needs. With fewer configured, the check is skipped with a reason such as `requires 2 identities, 1 configured`. `IdentityPairs` needs at least 2 and `IdentitiesEach` at least 1 on their own.
+
+```go
+harnessx.Check{
+  ID:                 "api.admin_route_exposed",
+  RequiresIdentities: 2,
+  Run:                func(ctx context.Context, target harnessx.Target, store harnessx.ResultStore) (harnessx.Result, error) { ... },
+}
+```
+
+## Reading a result per identity
+
+Every run of a check with an `IdentityMode` is stored on its own. A dependent check reads "the response identity A got for this resource" with `GetForIdentity`:
+
+```go
+r, ok := harnessx.GetForIdentity(store, "api.capture", resource.ID, "alice")
+r, ok := harnessx.GetForIdentity(store, "api.cross", resource.ID, "alice", "bob") // a pair run
+r, ok := harnessx.GetForIdentity(store, "api.whoami", "", "bob")                  // a ScopeGlobal check
+```
+
+`GetForIdentity` works on any store implementing `IdentityResultStore` (the engine's and `StaticResultStore` do), and reports false otherwise.
+
+## Baselines per identity
+
+`CaptureBaselineCheckConfig` and `BaselineCheckConfig` accept either a fixed `Identity` (skipped when that identity is not configured) or an `IdentityMode`. `BaselineFromIdentityCheck` reads a capture back for the identity the comparison runs as (the first of its pair), or for explicit names:
+
+```go
+capture := harnessx.NewCaptureBaselineCheck(harnessx.CaptureBaselineCheckConfig{
+  ID:           "api.capture",
+  DependsOn:    []harnessx.CheckID{"api.discover"},
+  IdentityMode: harnessx.IdentitiesEach,
+  Capture: func(ctx context.Context, _ harnessx.Target, res harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+    who, _ := harnessx.IdentityFrom(ctx)
+    return harnessx.CaptureSnapshot(ctx, p, requestAs(who, res))
+  },
+})
+
+cross := harnessx.NewBaselineCheck(harnessx.BaselineCheckConfig{
+  ID:           "api.cross_user_access",
+  DependsOn:    []harnessx.CheckID{"api.capture"},
+  IdentityMode: harnessx.IdentityPairs,
+  Baseline:     harnessx.BaselineFromIdentityCheck("api.capture"),
+  Capture: func(ctx context.Context, _ harnessx.Target, res harnessx.Resource, _ harnessx.ResultStore) (harnessx.Snapshot, error) {
+    pair, _ := harnessx.IdentityPairFrom(ctx)
+    return harnessx.CaptureSnapshot(ctx, p, requestAs(pair.Second, res))
+  },
+})
+```
+
+See [`examples/multi-identity`](https://github.com/cerberauth/harnessx/tree/main/examples/multi-identity) for a runnable broken object level authorization check.
