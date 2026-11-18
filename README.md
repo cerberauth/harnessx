@@ -638,12 +638,36 @@ if hit, ok := callback.WaitReceived(ctx, l, id, 5*time.Second); ok {
 
 See the [Out-of-band Callbacks guide](./docs/guides/callback.mdx) for the polling contract, network requirements and authorisation notice.
 
+---
+
+### Multiple Identities
+
+`Target.Identities` carries named credential sets (`Name`, `Metadata` such as role or tenant, opaque `Data`). A check with `IdentityMode: IdentitiesEach` runs once per identity and one with `IdentityPairs` once per ordered pair, sharing the per-resource concurrency limit; `RequiresIdentities` skips a check when too few are configured. Each run is an `Attempt` with its `Identities`, and `GetForIdentity(store, id, resourceID, "alice")` reads it back. With no identities configured, nothing changes.
+
+```go
+bola := harnessx.Check{
+    ID:           "api.bola",
+    Scope:        harnessx.ScopePerResource,
+    DependsOn:    []harnessx.CheckID{"api.capture"},
+    IdentityMode: harnessx.IdentityPairs,
+    RunResource: func(ctx context.Context, _ harnessx.Target, res harnessx.Resource, store harnessx.ResultStore) (harnessx.Result, error) {
+        pair, _ := harnessx.IdentityPairFrom(ctx)
+        owner, _ := harnessx.GetForIdentity(store, "api.capture", res.ID, pair.First.Name)
+        other, _ := harnessx.GetForIdentity(store, "api.capture", res.ID, pair.Second.Name)
+        return compare(owner, other), nil
+    },
+}
+```
+
+See the [Multiple Identities guide](./docs/guides/identities.mdx) and [`examples/multi-identity`](./examples/multi-identity/main.go).
+
 ## Examples
 
 - [Advanced Scan](./examples/advanced-scan/main.go): A comprehensive example demonstrating multi-level dependencies, resource discovery, custom conditions, and a pretty-printing reporter.
 - [Multi-Scenario Scan](./examples/multi-scenario/main.go): REST API and GraphQL API scenarios sharing business logic with different dependency graphs. Select a scenario at runtime via CLI argument.
 - [Baseline Scan](./examples/baseline-scan/main.go): Detects an authorization bypass by comparing live HTTP responses against a per-resource baseline — one captured at runtime, one defined manually.
 - [Check Pack](./examples/check-pack/main.go): Embeds a small ScopeGlobal check pack in a host engine that runs it once per discovered endpoint, with an internal fetch check.
+- [Multi-Identity](./examples/multi-identity/main.go): Captures every user's response for each object, then compares each ordered pair of users to detect broken object level authorization.
 
 ---
 

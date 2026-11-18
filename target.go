@@ -20,9 +20,13 @@ type Resource struct {
 
 // Target is what a scan runs against. The engine never interprets it; it is
 // passed unchanged to every check and reporter.
+//
+// Identities are the named credential sets checks with an IdentityMode fan out
+// over. With none configured, every check runs exactly as before.
 type Target struct {
-	URL      string
-	Host     string
-	Metadata map[string]string
-	Data     any
+	URL        string
+	Host       string
+	Metadata   map[string]string
+	Data       any
+	Identities []Identity
 }

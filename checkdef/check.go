@@ -17,6 +17,9 @@ type checkConfig struct {
 
 	variantTimeout     time.Duration
 	variantConcurrency int
+
+	identityMode       harnessx.IdentityMode
+	requiresIdentities int
 }
 
 // Option configures the optional fields of a Check built by NewCheck or
@@ -85,6 +88,20 @@ func WithVariantConcurrency(n int) Option {
 	}
 }
 
+// WithIdentityMode fans the check out over the target's identities.
+func WithIdentityMode(mode harnessx.IdentityMode) Option {
+	return func(cfg *checkConfig) {
+		cfg.identityMode = mode
+	}
+}
+
+// WithRequiresIdentities sets how many identities the check needs to run.
+func WithRequiresIdentities(n int) Option {
+	return func(cfg *checkConfig) {
+		cfg.requiresIdentities = n
+	}
+}
+
 func buildBase(def CheckDef, opts []Option) harnessx.Check {
 	var cfg checkConfig
 	for _, opt := range opts {
@@ -112,6 +129,9 @@ func buildBase(def CheckDef, opts []Option) harnessx.Check {
 
 		VariantTimeout:     cfg.variantTimeout,
 		VariantConcurrency: cfg.variantConcurrency,
+
+		IdentityMode:       cfg.identityMode,
+		RequiresIdentities: cfg.requiresIdentities,
 	}
 }
 

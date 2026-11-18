@@ -26,6 +26,9 @@ type resultStore struct {
 	resources  []Resource
 	resourceAt map[string]int // index in resources, by Resource.ID
 	merge      ResourceMergeFunc
+	// perIdentity holds the result of each identity run of a check with an
+	// IdentityMode.
+	perIdentity map[identityResultKey]Result
 }
 
 type checkResourceKey struct {
@@ -43,7 +46,15 @@ func newResultStore(merge ResourceMergeFunc) *resultStore {
 		aggregates: make(map[CheckID]Result),
 		resourceAt: make(map[string]int),
 		merge:      merge,
+
+		perIdentity: make(map[identityResultKey]Result),
 	}
+}
+
+func (s *resultStore) setForIdentity(id CheckID, resourceID string, r Result) {
+	s.mu.Lock()
+	s.perIdentity[newIdentityResultKey(id, resourceID, r.Identities)] = r
+	s.mu.Unlock()
 }
 
 func (s *resultStore) set(id CheckID, r Result) {
@@ -101,15 +112,42 @@ func (s *resultStore) snapshot() ResultStore {
 	}
 	resources := make([]Resource, len(s.resources))
 	copy(resources, s.resources)
+	perIdentity := make(map[identityResultKey]Result, len(s.perIdentity))
+	for k, v := range s.perIdentity {
+		perIdentity[k] = v
+	}
 
-	return &storeSnapshot{results: results, perRes: perRes, aggregates: aggregates, resources: resources}
+	return &storeSnapshot{results: results, perRes: perRes, aggregates: aggregates, resources: resources, perIdentity: perIdentity}
 }
 
 type storeSnapshot struct {
-	results    map[CheckID]Result
-	perRes     map[checkResourceKey]Result
-	aggregates map[CheckID]Result
-	resources  []Resource
+	results     map[CheckID]Result
+	perRes      map[checkResourceKey]Result
+	aggregates  map[CheckID]Result
+	resources   []Resource
+	perIdentity map[identityResultKey]Result
+}
+
+// GetForIdentity implements IdentityResultStore. A check run as one fixed
+// identity, such as a baseline captured with CaptureBaselineCheckConfig.Identity,
+// is found through its Result.Identities.
+func (s *storeSnapshot) GetForIdentity(id CheckID, resourceID string, identities ...string) (Result, bool) {
+	if r, ok := s.perIdentity[newIdentityResultKey(id, resourceID, identities)]; ok {
+		return r, true
+	}
+	var (
+		r  Result
+		ok bool
+	)
+	if resourceID == "" {
+		r, ok = s.results[id]
+	} else {
+		r, ok = s.perRes[checkResourceKey{id, resourceID}]
+	}
+	if ok && len(r.Identities) > 0 && sameIdentities(r.Identities, identities) {
+		return r, true
+	}
+	return Result{}, false
 }
 
 func (s *storeSnapshot) Get(id CheckID) (Result, bool) {
@@ -337,6 +375,9 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 		return s.summary, err
 	}
 
+	if preErr == nil {
+		preErr = validateIdentities(target.Identities)
+	}
 	if preErr != nil {
 		return finalize(preErr)
 	}
@@ -408,7 +449,11 @@ func (s *scan) runLevel(ctx context.Context, level []Check) {
 }
 
 func (s *scan) runCheck(ctx context.Context, chk Check, snapshot ResultStore) {
-	if reason := chk.skipReason(ctx, s.target, snapshot); reason != "" {
+	reason := identitySkipReason(chk, s.target)
+	if reason == "" {
+		reason = chk.skipReason(ctx, s.target, snapshot)
+	}
+	if reason != "" {
 		skipped := Result{CheckID: chk.ID, Skipped: true, SkipReason: reason}
 		s.store.set(chk.ID, skipped)
 		s.record(skipped)
@@ -424,7 +469,13 @@ func (s *scan) runCheck(ctx context.Context, chk Check, snapshot ResultStore) {
 
 func (s *scan) runGlobal(ctx context.Context, chk Check, snapshot ResultStore) {
 	s.reportStart(chk, nil)
-	result := s.execute(ctx, chk, nil, snapshot)
+	var result Result
+	if chk.IdentityMode != IdentitiesNone {
+		sem := semaphore.New(s.resourceConcurrency(chk))
+		result = s.executeIdentities(ctx, chk, nil, snapshot, sem)
+	} else {
+		result = s.execute(ctx, chk, nil, snapshot)
+	}
 	s.store.set(chk.ID, result)
 	s.store.mergeResources(result.Resources)
 	s.record(result)
@@ -449,11 +500,7 @@ func (s *scan) runPerResource(ctx context.Context, chk Check, snapshot ResultSto
 		}
 	}
 
-	resConcurrency := chk.Concurrency
-	if resConcurrency <= 0 {
-		resConcurrency = s.cfg.maxResourceConcurrency
-	}
-	resSem := semaphore.New(resConcurrency)
+	resSem := semaphore.New(s.resourceConcurrency(chk))
 
 	fanStart := time.Now()
 	results := make([]Result, len(resources))
@@ -462,6 +509,23 @@ func (s *scan) runPerResource(ctx context.Context, chk Check, snapshot ResultSto
 	var wg sync.WaitGroup
 	for i, res := range resources {
 		wg.Add(1)
+		if chk.IdentityMode != IdentitiesNone {
+			go func() {
+				defer wg.Done()
+				var result Result
+				if reason := chk.Skip.EvalResource(ctx, s.target, res, snapshot); reason != "" {
+					result = Result{CheckID: chk.ID, ResourceID: res.ID, Skipped: true, SkipReason: reason}
+				} else {
+					s.reportStart(chk, &res)
+					result = s.executeIdentities(ctx, chk, &res, snapshot, resSem)
+					s.store.mergeResources(result.Resources)
+				}
+				s.store.setForResource(chk.ID, res.ID, result)
+				results[i], ran[i] = result, true
+				s.record(result)
+			}()
+			continue
+		}
 		go func() {
 			defer wg.Done()
 			if !resSem.Acquire(ctx.Done()) {
@@ -491,6 +555,77 @@ func (s *scan) runPerResource(ctx context.Context, chk Check, snapshot ResultSto
 }
 
 const reasonCancelled = "scan cancelled"
+
+func (s *scan) resourceConcurrency(chk Check) int {
+	if chk.Concurrency > 0 {
+		return chk.Concurrency
+	}
+	return s.cfg.maxResourceConcurrency
+}
+
+// executeIdentities runs chk once per identity, or ordered identity pair, of
+// the target, for res or for the whole target when res is nil. Every run holds
+// a slot of sem, so the runs of all resources share one limit. Each run is
+// stored for GetForIdentity and recorded as an Attempt, in identity order.
+func (s *scan) executeIdentities(ctx context.Context, chk Check, res *Resource, snapshot ResultStore, sem *semaphore.Semaphore) Result {
+	resourceID := ""
+	if res != nil {
+		resourceID = res.ID
+	}
+	start := time.Now()
+	runs := identityRuns(chk.IdentityMode, s.target.Identities)
+	attempts := make([]Attempt, len(runs))
+
+	var wg sync.WaitGroup
+	for i, run := range runs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var r Result
+			if !sem.Acquire(ctx.Done()) {
+				r = Result{CheckID: chk.ID, ResourceID: resourceID, Err: ctx.Err()}
+			} else {
+				r = s.execute(run.bind(ctx), chk, res, snapshot)
+				sem.Release()
+			}
+			r.Identities = run.names
+			r.Observations = fillIdentities(r.Observations, run.names)
+			s.store.setForIdentity(chk.ID, resourceID, r)
+			attempts[i] = Attempt{
+				Identities:   run.names,
+				Observations: r.Observations,
+				Resources:    r.Resources,
+				Skipped:      r.Skipped,
+				SkipReason:   r.SkipReason,
+				Duration:     r.Duration,
+				Data:         r.Data,
+				Err:          r.Err,
+			}
+		}()
+	}
+	wg.Wait()
+
+	result := aggregateAttempts(attempts)
+	result.CheckID, result.ResourceID, result.Duration = chk.ID, resourceID, time.Since(start)
+	if len(attempts) > 0 && result.Skipped {
+		result.SkipReason = cmp.Or(attempts[0].SkipReason, "all identities skipped")
+	}
+	return result
+}
+
+// fillIdentities returns a copy of obs with each empty Identities set to names.
+func fillIdentities(obs []Observation, names []string) []Observation {
+	if len(obs) == 0 {
+		return obs
+	}
+	out := slices.Clone(obs)
+	for i := range out {
+		if len(out[i].Identities) == 0 {
+			out[i].Identities = names
+		}
+	}
+	return out
+}
 
 // recordCancelled records chk as skipped because the scan was cancelled before
 // it could run, so that Executed + Skipped + Failed still accounts for it.

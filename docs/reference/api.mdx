@@ -13,12 +13,50 @@ What you're scanning. The engine never interprets it; it is passed unchanged to 
 
 ```go
 type Target struct {
-  URL      string
-  Host     string
+  URL        string
+  Host       string
+  Metadata   map[string]string
+  Data       any
+  Identities []Identity
+}
+```
+
+### Identity
+
+A named credential set checks can run as. See the [Multiple Identities guide](/guides/identities).
+
+```go
+type Identity struct {
+  Name     string
   Metadata map[string]string
   Data     any
 }
+
+type IdentityPair struct{ First, Second Identity }
+
+type IdentityMode int
+
+const (
+  IdentitiesNone IdentityMode = iota
+  IdentitiesEach
+  IdentityPairs
+)
+
+func IdentityFrom(ctx context.Context) (Identity, bool)
+func IdentityPairFrom(ctx context.Context) (IdentityPair, bool)
+func ContextWithIdentity(ctx context.Context, identity Identity) context.Context
+func ContextWithIdentityPair(ctx context.Context, pair IdentityPair) context.Context
+func (t Target) IdentityByName(name string) (Identity, bool)
+
+type IdentityResultStore interface {
+  GetForIdentity(id CheckID, resourceID string, identities ...string) (Result, bool)
+}
+
+func GetForIdentity(store ResultStore, id CheckID, resourceID string, identities ...string) (Result, bool)
+func BaselineFromIdentityCheck(id CheckID, identities ...string) BaselineSource
 ```
+
+`Run` and `RunScenario` return `ErrInvalidIdentity` when an identity has an empty or duplicate name.
 
 ### Resource
 
@@ -64,6 +102,7 @@ type Observation struct {
   CheckID     CheckID
   ResourceID  string
   Variant     string
+  Identities  []string
   Title       string
   Description string
   Evidence    string
@@ -87,7 +126,8 @@ type Result struct {
   Metadata     map[string]string
   Data         any           // output for later checks, see GetData / DataAs
   Err          error         // non-nil marks the check as failed
-  Attempts     []Attempt     // one entry per variant, for checks that use Variants
+  Attempts     []Attempt     // one entry per variant, or per identity run for checks with an IdentityMode
+  Identities   []string      // identity, or ordered pair, of one identity run
 }
 ```
 
@@ -115,6 +155,7 @@ The outcome of a single variant of a `Variants` check — see [Check](#check) an
 ```go
 type Attempt struct {
   Variant      string
+  Identities   []string
   Observations []Observation
   Resources    []Resource
   Skipped      bool
@@ -433,6 +474,8 @@ type Check struct {
   Concurrency int
 
   Internal bool
+  IdentityMode       IdentityMode
+  RequiresIdentities int
 }
 
 func (c Check) Invoke(ctx context.Context, target Target, resource *Resource, store ResultStore) (Result, error)
@@ -460,6 +503,8 @@ type ResourceCheckFunc func(ctx context.Context, target Target, resource Resourc
 - `Timeout`: Max execution time of each invocation of the run function — per resource for a per-resource check, and for the whole variant set when `Variants` is set (use `VariantTimeout` to bound each variant). Falls back to the engine default (30s, see [`WithDefaultTimeout`](#withdefaulttimeout)) when `0`
 - `Concurrency`: Max resources run at once for this check; falls back to `WithMaxResourceConcurrency` when `0`
 - `Internal`: Plumbing check (fetch, baseline, context): it runs and dependent checks read its result, but reporters and the `ScanSummary` never see it
+- `IdentityMode`: Fan the check out over `Target.Identities`, once per identity (`IdentitiesEach`) or per ordered pair (`IdentityPairs`); each run is an `Attempt` with its `Identities`. Cannot be combined with `Variants`
+- `RequiresIdentities`: Skip the check when fewer identities are configured
 
 `Invoke` runs the check once outside the engine, for `resource` (or the whole target when `nil`), including the variant fan-out with the check's own variant settings. Timeout and panic recovery are left to the caller.
 

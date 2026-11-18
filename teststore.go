@@ -6,22 +6,29 @@ import "slices"
 // Results a check's Skip decision or Conditions should see, without running
 // the Engine.
 type StaticResultStore struct {
-	results   map[CheckID]Result
-	perRes    map[checkResourceKey]Result
-	resources []Resource
+	results     map[CheckID]Result
+	perRes      map[checkResourceKey]Result
+	perIdentity map[identityResultKey]Result
+	resources   []Resource
 }
 
 // NewStaticResultStore returns a StaticResultStore seeded with results, keyed by
 // each Result's CheckID. A Result with a ResourceID is the result of a
 // ScopePerResource check for that resource, as GetForResource returns it; Get
 // then returns a rolled-up result, like the engine's, unless a Result without a
-// ResourceID was seeded for the same check.
+// ResourceID was seeded for the same check. A Result with Identities is the
+// result of one identity run, as GetForIdentity returns it.
 func NewStaticResultStore(results ...Result) *StaticResultStore {
 	s := &StaticResultStore{
-		results: make(map[CheckID]Result, len(results)),
-		perRes:  make(map[checkResourceKey]Result),
+		results:     make(map[CheckID]Result, len(results)),
+		perRes:      make(map[checkResourceKey]Result),
+		perIdentity: make(map[identityResultKey]Result),
 	}
 	for _, r := range results {
+		if len(r.Identities) > 0 {
+			s.perIdentity[newIdentityResultKey(r.CheckID, r.ResourceID, r.Identities)] = r
+			continue
+		}
 		if r.ResourceID != "" {
 			s.perRes[checkResourceKey{r.CheckID, r.ResourceID}] = r
 			continue
@@ -91,3 +98,9 @@ func (s *StaticResultStore) Observations() []Observation {
 
 // Resources returns the resources seeded with WithResources.
 func (s *StaticResultStore) Resources() []Resource { return s.resources }
+
+// GetForIdentity returns the result seeded for id, resourceID and identities.
+func (s *StaticResultStore) GetForIdentity(id CheckID, resourceID string, identities ...string) (Result, bool) {
+	r, ok := s.perIdentity[newIdentityResultKey(id, resourceID, identities)]
+	return r, ok
+}
