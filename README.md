@@ -623,6 +623,21 @@ checks, err := embed.Checks(pack.Checks(), embed.Options{
 
 See the [Check Packs guide](./docs/guides/check-packs.mdx) and [`examples/check-pack`](./examples/check-pack/main.go).
 
+### Out-of-band Callbacks
+
+The `callback` package confirms that a target made an outbound request to a URL the scanner supplied (`jku` / `x5u` injection, SSRF). A built-in listener and a polling client for a user-run collector share one interface; `WaitReceived` returns as soon as the request arrives.
+
+```go
+l, _ := callback.Listen(ctx, callback.ListenerOptions{Addr: ":8089", PublicURL: "http://scanner.example.com:8089"})
+u, id := l.NewToken("proxy.ssrf.open_forward_proxy", "")
+// ... make the target request u ...
+if hit, ok := callback.WaitReceived(ctx, l, id, 5*time.Second); ok {
+    fmt.Println(hit) // GET /<id> from 203.0.113.7:51234 at ...
+}
+```
+
+See the [Out-of-band Callbacks guide](./docs/guides/callback.mdx) for the polling contract, network requirements and authorisation notice.
+
 ## Examples
 
 - [Advanced Scan](./examples/advanced-scan/main.go): A comprehensive example demonstrating multi-level dependencies, resource discovery, custom conditions, and a pretty-printing reporter.

@@ -1,0 +1,96 @@
+---
+title: Out-of-band Callbacks
+description: Confirm that a target made an outbound request to a URL the scanner supplied
+sidebar:
+  order: 12
+---
+
+## Overview
+
+Some vulnerabilities only show when the target reaches out: a JWT `jku` / `x5u` header the server fetches, an SSRF through a proxy, a webhook URL. The `callback` package hands each probe a unique URL and tells the check whether the target requested it.
+
+```go
+type Collector interface {
+  NewToken(checkID, resourceID string) (url, id string)
+  Received(ctx context.Context, id string) (Hit, bool)
+  Handle(id string, h http.Handler) error
+  Close() error
+}
+
+func WaitReceived(ctx context.Context, c Collector, id string, timeout time.Duration) (Hit, bool)
+```
+
+A `Hit` carries the time, source address, method, path, headers and the request body up to a cap (64 KiB by default). `Hit.String()` is ready to use as report evidence.
+
+## Using it in a check
+
+Pass the collector through the pack context, never through a package-level variable, and skip the check when none is configured:
+
+```go
+func(ctx context.Context, target harnessx.Target, store harnessx.ResultStore) (harnessx.Result, error) {
+  pack := target.Data.(*Context)
+  if pack.Callback == nil {
+    return harnessx.Result{Skipped: true, SkipReason: "no callback collector configured"}, nil
+  }
+  u, id := pack.Callback.NewToken("proxy.ssrf.open_forward_proxy", "")
+  sendProbePointingAt(ctx, target, u)
+
+  hit, ok := callback.WaitReceived(ctx, pack.Callback, id, 5*time.Second)
+  if !ok {
+    return harnessx.Result{}, nil
+  }
+  return harnessx.Result{Observations: []harnessx.Observation{{
+    Title:    "Target fetched the callback URL",
+    Evidence: hit.String(),
+  }}}, nil
+}
+```
+
+`WaitReceived` returns as soon as the request arrives; checks never sleep.
+
+## Built-in listener
+
+`Listen` runs an HTTP server inside the scanner. It stops when its context is done or on `Close`.
+
+```go
+l, err := callback.Listen(ctx, callback.ListenerOptions{
+  Addr:      ":8089",
+  PublicURL: "http://scanner.example.com:8089",
+})
+```
+
+`Handle` serves content on a token URL, such as the key set a forged `jku` header points to. Requests to unknown tokens get a 404 and are not recorded.
+
+## Polling client
+
+When the scanner cannot accept inbound connections, run a collector somewhere the target can reach and point a `Poller` at it:
+
+```go
+p := callback.NewPoller(callback.PollerOptions{
+  BaseURL: "https://oob.example.com",
+  Header:  http.Header{"Authorization": {"Bearer " + token}},
+})
+```
+
+The collector must:
+
+1. Record every request whose path starts with `/<id>` under `BaseURL`.
+2. Answer `GET <PollURL>?id=<id>` (`PollURL` defaults to `<BaseURL>/hits`) with `200` and a JSON array of hits, oldest first, `[]` when none:
+
+```json
+[{"time": "2026-01-02T15:04:05Z", "remote_addr": "203.0.113.7:51234", "method": "GET",
+  "path": "/<id>/jwks.json", "headers": {"User-Agent": ["Go-http-client/1.1"]},
+  "body": "", "body_truncated": false}]
+```
+
+Only `time`, `remote_addr`, `method` and `path` are required. A poller cannot serve content: `Handle` returns `ErrHandleUnsupported`.
+
+## Network requirements
+
+- The callback URL must be reachable **from the target**, not only from the scanner. `127.0.0.1` works only for a target on the same host. For a remote target, bind a public interface and open the port, use a tunnel, or run a collector and use the poller.
+- Set `PublicURL` to the address the target uses when it differs from the bind address (NAT, reverse proxy, tunnel).
+- Egress filtering on the target side produces false negatives: a missing hit means "not confirmed", not "not vulnerable".
+
+## Authorization
+
+Out-of-band probes make the target send requests to infrastructure you control and may traverse third-party networks. Only run them against systems you are authorised to test, and keep the collector private: hits can contain headers, tokens and request bodies from the target.
