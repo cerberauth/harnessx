@@ -283,6 +283,8 @@ type scan struct {
 
 	// order is the dependency level of each check, used to sort the summary.
 	order map[CheckID]int
+	// internal holds the checks hidden from reporters and the summary.
+	internal map[CheckID]bool
 
 	mu      sync.Mutex // guards summary
 	summary ScanSummary
@@ -290,17 +292,24 @@ type scan struct {
 
 // validateChecks rejects duplicate IDs and checks that cannot run.
 func validateChecks(checks []Check) error {
-	seen := make(map[CheckID]struct{}, len(checks))
-	for _, c := range checks {
-		if _, dup := seen[c.ID]; dup {
-			return fmt.Errorf("%w: %q", ErrDuplicateCheckID, c.ID)
+	seen := make(map[CheckID]int, len(checks))
+	for i, c := range checks {
+		if prev, dup := seen[c.ID]; dup {
+			return fmt.Errorf("%w: %q is used by %s and %s", ErrDuplicateCheckID, c.ID, describeCheck(checks[prev], prev), describeCheck(c, i))
 		}
-		seen[c.ID] = struct{}{}
+		seen[c.ID] = i
 		if err := c.validate(); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func describeCheck(c Check, i int) string {
+	if c.Name != "" {
+		return fmt.Sprintf("%q", c.Name)
+	}
+	return fmt.Sprintf("check #%d", i+1)
 }
 
 func (e *Engine) run(ctx context.Context, target Target, checks []Check, callReporters []Reporter, preErr error) (ScanSummary, error) {
@@ -343,13 +352,17 @@ func (e *Engine) run(ctx context.Context, target Target, checks []Check, callRep
 	}
 
 	s.order = make(map[CheckID]int, len(checks))
+	s.internal = make(map[CheckID]bool)
 	for i, level := range ordered {
 		for _, c := range level {
 			s.order[c.ID] = i
+			if c.Internal {
+				s.internal[c.ID] = true
+			}
 		}
 	}
 
-	s.summary.TotalChecks = len(checks)
+	s.summary.TotalChecks = len(checks) - len(s.internal)
 	for _, r := range s.reporters {
 		r.OnScanStart(target, s.summary.TotalChecks)
 	}
@@ -410,9 +423,7 @@ func (s *scan) runCheck(ctx context.Context, chk Check, snapshot ResultStore) {
 }
 
 func (s *scan) runGlobal(ctx context.Context, chk Check, snapshot ResultStore) {
-	for _, r := range s.reporters {
-		r.OnCheckStart(chk, s.target, nil)
-	}
+	s.reportStart(chk, nil)
 	result := s.execute(ctx, chk, nil, snapshot)
 	s.store.set(chk.ID, result)
 	s.store.mergeResources(result.Resources)
@@ -433,7 +444,7 @@ func (s *scan) runPerResource(ctx context.Context, chk Check, snapshot ResultSto
 	}
 
 	for _, r := range s.reporters {
-		if pr, ok := r.(ResourcePlanReporter); ok {
+		if pr, ok := r.(ResourcePlanReporter); ok && !chk.Internal {
 			pr.OnResourcesDiscovered(chk, len(resources))
 		}
 	}
@@ -466,9 +477,7 @@ func (s *scan) runPerResource(ctx context.Context, chk Check, snapshot ResultSto
 			if reason := chk.Skip.EvalResource(ctx, s.target, res, snapshot); reason != "" {
 				result = Result{CheckID: chk.ID, ResourceID: res.ID, Skipped: true, SkipReason: reason}
 			} else {
-				for _, r := range s.reporters {
-					r.OnCheckStart(chk, s.target, &res)
-				}
+				s.reportStart(chk, &res)
 				result = s.execute(ctx, chk, &res, snapshot)
 				s.store.mergeResources(result.Resources)
 			}
@@ -552,8 +561,21 @@ func fillObservations(obs []Observation, id CheckID, resourceID, variant string)
 	return out
 }
 
-// record reports a finished result to the reporters and adds it to the summary.
+func (s *scan) reportStart(chk Check, res *Resource) {
+	if chk.Internal {
+		return
+	}
+	for _, r := range s.reporters {
+		r.OnCheckStart(chk, s.target, res)
+	}
+}
+
+// record reports a finished result to the reporters and adds it to the
+// summary, unless it belongs to an internal check.
 func (s *scan) record(result Result) {
+	if s.internal[result.CheckID] {
+		return
+	}
 	for _, r := range s.reporters {
 		r.OnCheckComplete(result)
 	}

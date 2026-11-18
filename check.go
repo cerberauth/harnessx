@@ -258,6 +258,11 @@ type Check struct {
 
 	Timeout     time.Duration
 	Concurrency int
+
+	// Internal marks a plumbing check (fetch, baseline, context): it runs and
+	// its result is readable by dependent checks, but reporters and the
+	// ScanSummary never see it.
+	Internal bool
 }
 
 // skipReason returns why c should not run against store, or "" if it should:
@@ -316,6 +321,24 @@ func (c Check) validate() error {
 
 func (c Check) variantLimits() variantLimits {
 	return variantLimits{concurrency: c.VariantConcurrency, timeout: c.VariantTimeout}
+}
+
+// Invoke runs c once outside the engine: for resource, or for the whole target
+// when resource is nil. A check with Variants fans out over them with its own
+// VariantMode, VariantConcurrency and VariantTimeout and returns the merged
+// Result, exactly as the engine does. Timeout and panic recovery are left to
+// the caller.
+func (c Check) Invoke(ctx context.Context, target Target, resource *Resource, store ResultStore) (Result, error) {
+	if err := c.validate(); err != nil {
+		return Result{}, err
+	}
+	if resource == nil && c.Scope == ScopePerResource {
+		return Result{}, fmt.Errorf("harnessx: check %q has ScopePerResource but no resource was given", c.ID)
+	}
+	if resource != nil && c.Scope == ScopeGlobal {
+		resource = nil
+	}
+	return c.invoke(target, store, resource)(ctx)
 }
 
 // invoke returns the function that executes c once: for res, or for the whole

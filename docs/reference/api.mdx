@@ -431,7 +431,11 @@ type Check struct {
 
   Timeout     time.Duration
   Concurrency int
+
+  Internal bool
 }
+
+func (c Check) Invoke(ctx context.Context, target Target, resource *Resource, store ResultStore) (Result, error)
 
 type CheckFunc func(ctx context.Context, target Target, store ResultStore) (Result, error)
 type ResourceCheckFunc func(ctx context.Context, target Target, resource Resource, store ResultStore) (Result, error)
@@ -455,6 +459,9 @@ type ResourceCheckFunc func(ctx context.Context, target Target, resource Resourc
 - `VariantConcurrency`: Max variants in flight at once in `VariantsParallel` mode (optional, unlimited when `0`)
 - `Timeout`: Max execution time of each invocation of the run function — per resource for a per-resource check, and for the whole variant set when `Variants` is set (use `VariantTimeout` to bound each variant). Falls back to the engine default (30s, see [`WithDefaultTimeout`](#withdefaulttimeout)) when `0`
 - `Concurrency`: Max resources run at once for this check; falls back to `WithMaxResourceConcurrency` when `0`
+- `Internal`: Plumbing check (fetch, baseline, context): it runs and dependent checks read its result, but reporters and the `ScanSummary` never see it
+
+`Invoke` runs the check once outside the engine, for `resource` (or the whole target when `nil`), including the variant fan-out with the check's own variant settings. Timeout and panic recovery are left to the caller.
 
 **Per-resource results.** A `ScopePerResource` check is recorded once per resource, readable with `store.GetForResource(id, resourceID)`. `store.Get(id)` returns a rolled-up check-level `Result` for it, available once every resource has run: its `Observations` are all the resources' observations, its `Err` is the first resource error, and it is `Skipped` only if every resource was skipped. `Data` and `Resources` are not aggregated; read them per resource. This is what lets `IfCheckPassed`, `IfCheckObserved` and `IfCheckSkipped` work on a per-resource dependency. The aggregate is not counted in `ScanSummary`.
 
@@ -626,6 +633,31 @@ func RunVariants(ctx context.Context, variants []string, mode VariantMode, fn fu
 - A panic in `fn` is recovered onto that attempt's `Err` as a `*ScanError`.
 - If `ctx` is cancelled, variants that have not started do not run; each is recorded as an attempt whose `Err` is `ctx.Err()`.
 - `Result.Data` is not set; each attempt's `Data` stays on its `Attempt`.
+
+`AggregateAttempts(attempts []Attempt) Result` merges attempts the same way.
+
+### embed
+
+Wraps the checks of a check pack for a host engine. See the [Check Packs guide](/guides/check-packs).
+
+```go
+type ContextFunc func(ctx context.Context, target harnessx.Target, resource *harnessx.Resource) (any, error)
+
+type Options struct {
+  Scope     harnessx.CheckScope
+  Prefix    string
+  Rename    func(harnessx.CheckID) harnessx.CheckID
+  Context   ContextFunc
+  ContextID harnessx.CheckID
+  Resource  func(target harnessx.Target) harnessx.Resource
+  DependsOn []harnessx.CheckID
+  Skip      harnessx.SkipDecision
+}
+
+func Checks(pack []harnessx.Check, opts Options) ([]harnessx.Check, error)
+func MustChecks(pack []harnessx.Check, opts Options) []harnessx.Check
+func Select(pack []harnessx.Check, ids ...harnessx.CheckID) ([]harnessx.Check, error)
+```
 
 ### ScanSummary
 

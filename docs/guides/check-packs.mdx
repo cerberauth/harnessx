@@ -1,0 +1,78 @@
+---
+title: Check Packs
+description: Ship checks another harnessx scanner can embed, and embed them
+sidebar:
+  order: 11
+---
+
+## Overview
+
+A check pack is the set of checks a harnessx-based tool ships (jwtop, cache-detective, proxyaudit, ...). Following the contract below lets any other scanner register those checks in its own engine with `harnessx/embed`, writing nothing but the code that builds the pack context.
+
+## Contract
+
+- **IDs** are `<pack>.<snake_case>`: `jwt.alg_none`, `cache.authenticated_cacheable`, `proxy.headers.csp`. A pack never registers an un-prefixed ID, so two packs never collide in one engine.
+- **Findings** are reported as `Result.Observations`. `Result.Data` is only for the pack's dependent checks.
+- **Plumbing** checks (fetch, baseline, context) set `Internal: true` (`internal: true` in a `check.yaml`). They run and their results stay readable, but reporters and the `ScanSummary` never see them.
+- **One context, one list.** The pack exports a constructor for its context (the value checks read from `Target.Data`) and a function returning its checks. It holds no package-level mutable state: anything a scan changes lives in the context.
+- **Requests** are built through a request factory and sent through a `*probe.Probe` carried by the context, so the embedder controls method, body, headers, credentials, transport and rate limit.
+- **Dependencies** are read through the `ResultStore` only (`store.Get`, `store.GetForResource`), never from shared variables.
+
+```go
+package jwtpack
+
+type Context struct {
+  Probe      *probe.Probe
+  NewRequest func(ctx context.Context, token string) (*http.Request, error)
+  Token      string
+}
+
+func NewContext(token string, p *probe.Probe) *Context { ... }
+
+func Checks() []harnessx.Check {
+  return []harnessx.Check{baselineCheck, algNoneCheck}
+}
+```
+
+## Embedding a pack
+
+`embed.Checks` wraps the pack's checks for the host engine:
+
+```go
+checks, err := embed.Checks(jwtpack.Checks(), embed.Options{
+  Scope:     harnessx.ScopePerResource,
+  DependsOn: []harnessx.CheckID{"host.discover"},
+  Skip:      skipUnlessJWT,
+  Context: func(ctx context.Context, target harnessx.Target, resource *harnessx.Resource) (any, error) {
+    return jwtpack.NewContext(tokenOf(resource), probe.New()), nil
+  },
+})
+if err != nil {
+  return err
+}
+engine.Register(checks...)
+```
+
+What it does:
+
+- **Context**: `Context` runs once per host resource (or once for a `ScopeGlobal` host) in an internal `<pack>.context` check. Every wrapped check depends on it and receives its value as `Target.Data`. Left nil, pack checks receive the host `Target.Data` unchanged. If it fails or is skipped, the pack checks are skipped for that resource with the reason.
+- **Scope conversion**: a `ScopeGlobal` pack check in a `ScopePerResource` host runs once per resource, against `Target{URL: resource.URL}`. A `ScopePerResource` pack check in a `ScopeGlobal` host runs once, against a single resource (`Options.Resource`, a GET of the target URL by default).
+- **Scoped store**: a global pack check embedded per resource reads its dependencies' results for the current resource through `store.Get`. A per-resource pack check embedded globally sees its single resource.
+- **Graph and skips**: the pack's `DependsOn`, `Skip`, `Conditions`, `Variants` and `Internal` are kept. `Options.Skip` and `Options.DependsOn` add host requirements on top.
+- **IDs**: `Options.Prefix` and `Options.Rename` change every ID, `DependsOn` entry, store lookup and observation `CheckID` consistently.
+
+Two packs that both define `baseline` register side by side once prefixed:
+
+```go
+jwtChecks := embed.MustChecks(jwtpack.Checks(), embed.Options{Prefix: "jwt."})
+cacheChecks := embed.MustChecks(cachepack.Checks(), embed.Options{Prefix: "cache."})
+engine.Register(append(jwtChecks, cacheChecks...)...)
+```
+
+Use `embed.Select(pack, ids...)` to keep only some checks of a pack together with everything they depend on.
+
+## Running a check outside the engine
+
+`Check.Invoke` runs any check once, including the variant fan-out with its own `VariantMode`, `VariantConcurrency` and `VariantTimeout`, and `AggregateAttempts` merges attempts the way the engine does. An adapter never has to copy the engine's variant logic.
+
+See [`examples/check-pack`](https://github.com/cerberauth/harnessx/tree/main/examples/check-pack) for a runnable pack embedded in a per-resource host.
